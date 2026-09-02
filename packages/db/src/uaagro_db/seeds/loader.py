@@ -800,8 +800,12 @@ async def _seed_farmers(
             report.note("farmers", created=False)
             continue
 
-        _, first_hi = rng.choice(seed_data.FARMER_FIRST_NAMES)
-        _, last_hi = rng.choice(seed_data.FARMER_SURNAMES)
+        # The English spelling, because the panel is read in English and a
+        # farmer's name is data an operator types, searches and reads back --
+        # not something the agent composes. The Hindi spelling stays in the
+        # seed tables for anything that needs to speak it.
+        first_en, _ = rng.choice(seed_data.FARMER_FIRST_NAMES)
+        last_en, _ = rng.choice(seed_data.FARMER_SURNAMES)
         centre = rng.choice(centre_list)
         crops = rng.sample([c.name_en for c in seed_data.CROPS], k=rng.randint(1, 3))
         land_value = Decimal(str(round(rng.uniform(0.5, 12.0), 2)))
@@ -812,7 +816,7 @@ async def _seed_farmers(
             phone_hash=phone_hash,
             phone_enc=cipher.encrypt(phone),
             phone_last4=phone[-4:],
-            full_name=f"{first_hi} {last_hi}",
+            full_name=f"{first_en} {last_en}",
             village=rng.choice(seed_data.VILLAGE_NAMES),
             district_id=centre.district_id,
             pincode=None,

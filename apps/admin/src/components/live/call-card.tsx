@@ -47,7 +47,7 @@ export function CallCard({
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <span aria-hidden="true" className="h-2 w-2 shrink-0 animate-live rounded-full bg-amber" />
-            <span lang="hi" className="truncate text-name font-semibold">
+            <span className="truncate text-name font-semibold">
               {call.farmerName ?? t("unknownFarmer")}
             </span>
             <Last4 value={call.callerLast4} className="text-label" />

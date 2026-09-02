@@ -42,7 +42,7 @@ export async function FlowList({
               className={clsx("flex flex-col gap-1 rounded-panel px-3.5 py-3", active ? "bg-inset" : "hover:bg-paper")}
             >
               <div className="flex items-center justify-between gap-2">
-                <span lang="hi" className="truncate text-base font-semibold">
+                <span className="truncate text-base font-semibold">
                   {group.name}
                 </span>
                 <Chip tone={group.state === "live" ? "green" : "grey"}>{t(`state.${group.state}`)}</Chip>

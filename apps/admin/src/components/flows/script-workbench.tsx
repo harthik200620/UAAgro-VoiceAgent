@@ -96,7 +96,7 @@ export function ScriptWorkbench({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 grow basis-[420px]">
             <div className="flex flex-wrap items-center gap-2.5">
-              <span lang="hi" className="text-xl font-semibold">
+              <span className="text-xl font-semibold">
                 {flow.name}
               </span>
               <Chip tone={state === "live" ? "green" : "grey"}>

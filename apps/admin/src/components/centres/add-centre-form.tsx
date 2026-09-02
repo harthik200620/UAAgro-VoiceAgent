@@ -49,7 +49,7 @@ export function AddCentreForm() {
       </Field>
       <div className="flex gap-2.5">
         <Field label={t("manager")} className="w-1/2">
-          <input name="managerName" lang="hi" placeholder={t("managerPlaceholder")} className={inputClass} />
+          <input name="managerName" placeholder={t("managerPlaceholder")} className={inputClass} />
         </Field>
         <Field label={t("managerNumber")} className="w-1/2">
           <input name="managerNumber" type="tel" placeholder="+91" className={`${inputClass} font-mono`} />

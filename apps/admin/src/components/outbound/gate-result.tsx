@@ -33,7 +33,7 @@ export function GateResult({ result }: { result: CampaignImport }) {
   return (
     <div className="flex flex-col gap-4.5">
       <div className="flex items-center gap-2.5">
-        <span lang="hi" className="text-xl font-semibold">
+        <span className="text-xl font-semibold">
           {campaign.name}
         </span>
         <CampaignChip status={campaign.status} />

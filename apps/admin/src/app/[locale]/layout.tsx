@@ -9,7 +9,7 @@ import { isLocale } from "@/i18n/routing";
 import "../globals.css";
 
 export const metadata: Metadata = {
-  title: "UA Agro — किसान सेवा केंद्र",
+  title: "UA Agro — Kisan Sewa Kendra",
   description: "Control room for the UA Agro farmer helpline",
   // An operations tool, not a marketing site. Nothing here should be indexed,
   // previewed or shared.

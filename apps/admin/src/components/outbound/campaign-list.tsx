@@ -33,7 +33,7 @@ export async function CampaignList({ campaigns }: { campaigns: CampaignSummary[]
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2.5">
-                  <span lang="hi" className="truncate text-prose font-semibold leading-tight">
+                  <span className="truncate text-prose font-semibold leading-tight">
                     {campaign.name}
                   </span>
                   <CampaignChip status={campaign.status} />

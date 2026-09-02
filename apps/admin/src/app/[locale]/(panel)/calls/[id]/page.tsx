@@ -58,7 +58,7 @@ export default async function CallPage({ params }: { params: Promise<{ id: strin
           <Icon name="chevronLeft" size={14} />
           {call.campaignId ? (
             <>
-              {t("backToCampaign")} · <span lang="hi">{call.campaignName ?? call.campaignId}</span>
+              {t("backToCampaign")} · <span>{call.campaignName ?? call.campaignId}</span>
             </>
           ) : (
             t("backToCalls")
@@ -67,7 +67,7 @@ export default async function CallPage({ params }: { params: Promise<{ id: strin
         <div className="flex items-end justify-between gap-5">
           <div>
             <div className="flex items-center gap-3">
-              <h1 lang="hi" className="text-title-sm font-semibold">
+              <h1 className="text-title-sm font-semibold">
                 {call.farmerName ?? t("unknownFarmer")}
               </h1>
               <Last4 value={call.callerLast4} className="text-base" />

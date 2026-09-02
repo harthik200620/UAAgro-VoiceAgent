@@ -26,6 +26,8 @@ import hmac
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
+from xml.sax.saxutils import escape, quoteattr
 
 import structlog
 
@@ -181,9 +183,7 @@ class ExotelAdapter(HttpTelephonyAdapter):
         log.info("telephony.originated", provider=self.provider.value, sid=sid)
         return sid
 
-    async def transfer(
-        self, *, call_sid: str, to: str, whisper_text: str | None = None
-    ) -> None:
+    async def transfer(self, *, call_sid: str, to: str, whisper_text: str | None = None) -> None:
         destination = assert_approved_destination(to, self.approved_destinations)
         await self._post(
             f"/Calls/{call_sid}.json",
@@ -237,14 +237,17 @@ class PlivoAdapter(HttpTelephonyAdapter):
         del custom_field
         body = await self._post(
             "/Call/",
-            {"to": destination, "from": from_, "answer_url": callback_url,
-             "answer_method": "POST", "ring_timeout": RING_TIMEOUT_S},
+            {
+                "to": destination,
+                "from": from_,
+                "answer_url": callback_url,
+                "answer_method": "POST",
+                "ring_timeout": RING_TIMEOUT_S,
+            },
         )
         return str(body.get("request_uuid", ""))
 
-    async def transfer(
-        self, *, call_sid: str, to: str, whisper_text: str | None = None
-    ) -> None:
+    async def transfer(self, *, call_sid: str, to: str, whisper_text: str | None = None) -> None:
         assert_approved_destination(to, self.approved_destinations)
         await self._post(
             f"/Call/{call_sid}/",
@@ -254,6 +257,125 @@ class PlivoAdapter(HttpTelephonyAdapter):
     async def hangup(self, *, call_sid: str) -> None:
         client = self._ensure_client()
         await client.delete(f"/Call/{call_sid}/")
+
+
+@dataclass
+class TwilioAdapter(HttpTelephonyAdapter):
+    """Twilio Programmable Voice.
+
+    Different from the other two in one way that shapes everything here:
+    Twilio does not take "connect this call to a websocket" as a dial
+    parameter. It takes TwiML -- a document describing what the call should
+    do -- and `<Connect><Stream>` is the verb that opens a two-way media
+    stream. So `originate` sends the document inline rather than pointing
+    Twilio at a webhook, which means there is no TwiML endpoint to host,
+    nothing to keep in sync with the dialer, and no way for a request that
+    reaches that endpoint out of order to connect a call to the wrong farmer.
+
+    The stream URL carries the same token the inbound socket checks, and the
+    campaign contact rides along as a `<Parameter>`, which Twilio echoes in
+    the start frame's `customParameters` -- where `runtime.direction` reads
+    it.
+    """
+
+    provider: TelephonyProvider = TelephonyProvider.TWILIO
+
+    def _auth(self) -> tuple[str, str]:
+        return (
+            self.settings.require("twilio_api_key_sid", needed_for="Twilio call control"),
+            self.settings.require("twilio_api_key_secret", needed_for="Twilio call control"),
+        )
+
+    def _base_url(self) -> str:
+        account = self.settings.require("twilio_account_sid", needed_for="Twilio call control")
+        return f"https://api.twilio.com/2010-04-01/Accounts/{account}"
+
+    async def originate(
+        self, *, to: str, from_: str, callback_url: str, custom_field: str | None = None
+    ) -> str:
+        destination = assert_approved_destination(to, self.approved_destinations)
+        # `callback_url` is the answer webhook the other providers need. Twilio
+        # is told what to do directly, so it is used only to derive the media
+        # host when `public_base_url` has not been set to the same place.
+        del callback_url
+        body = await self._post(
+            "/Calls.json",
+            {
+                "To": destination,
+                "From": from_,
+                "Twiml": self._stream_twiml(custom_field),
+                "Timeout": RING_TIMEOUT_S,
+                # A call that somehow outlives the conversation is stopped by
+                # the provider rather than billed until somebody notices.
+                "TimeLimit": 900,
+            },
+        )
+        sid = str(body.get("sid", ""))
+        log.info("telephony.originated", provider=self.provider.value, sid=sid)
+        return sid
+
+    def _stream_twiml(self, custom_field: str | None) -> str:
+        """`<Connect><Stream>` pointed at this worker's voice socket."""
+        url = websocket_url(self.settings)
+        parameter = ""
+        if custom_field:
+            parameter = f"<Parameter name={quoteattr('contact')} value={quoteattr(custom_field)}/>"
+        stream = f"<Stream url={quoteattr(url)}>{parameter}</Stream>"
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            f"<Response><Connect>{stream}</Connect></Response>"
+        )
+
+    async def transfer(self, *, call_sid: str, to: str, whisper_text: str | None = None) -> None:
+        destination = assert_approved_destination(to, self.approved_destinations)
+        # The whisper is not sent. Twilio plays one by fetching TwiML when the
+        # manager answers (`<Number url="...">`), and nothing serves that
+        # document yet -- see the note on `_whisper_url`. Dialling without it
+        # connects the farmer, which is the part that matters; the manager
+        # simply gets no preamble.
+        if whisper_text is not None:
+            log.info("telephony.whisper_skipped", provider=self.provider.value)
+        await self._post(
+            f"/Calls/{call_sid}.json",
+            {
+                "Twiml": (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    f"<Response><Dial timeout={quoteattr(str(RING_TIMEOUT_S))}>"
+                    f"<Number>{escape(destination)}</Number></Dial></Response>"
+                )
+            },
+        )
+        log.info(
+            "telephony.transferred",
+            provider=self.provider.value,
+            target=redact(destination),
+            whispered=False,
+        )
+
+    async def hangup(self, *, call_sid: str) -> None:
+        await self._post(f"/Calls/{call_sid}.json", {"Status": "completed"})
+
+
+def websocket_url(settings: Settings) -> str:
+    """Where the provider should open the media stream.
+
+    Derived from ``PUBLIC_BASE_URL`` because that is the one address which is
+    already required to be the externally-resolvable one; a second variable
+    for the same host is a second thing to get wrong. http becomes ws and
+    https becomes wss, so a deployment that has TLS gets a secure stream
+    without saying so twice.
+
+    The token is the same one the socket checks on every connection. It is in
+    a query string, which is where Twilio accepts it -- and it is a shared
+    secret for one endpoint, not a credential for a person, so it is not
+    subject to §17's rule about identifiers in URLs.
+    """
+    base = settings.public_base_url.rstrip("/")
+    scheme = "wss" if base.startswith("https://") else "ws"
+    host = base.split("://", 1)[-1]
+    url = f"{scheme}://{host}/ws/voice"
+    token = settings.telephony_ws_token
+    return f"{url}?token={quote(token, safe='')}" if token else url
 
 
 def _whisper_url(settings: Settings, whisper_text: str | None) -> str:
@@ -299,15 +421,15 @@ def verify_signature(
     return hmac.compare_digest(digest, candidate)
 
 
-def build_adapter(
-    settings: Settings, approved: frozenset[str] = frozenset()
-) -> TelephonyAdapter:
+def build_adapter(settings: Settings, approved: frozenset[str] = frozenset()) -> TelephonyAdapter:
     """The adapter for the configured provider (§4.1: a config change)."""
     provider = TelephonyProvider(settings.telephony_provider)
     if provider is TelephonyProvider.EXOTEL:
         return ExotelAdapter(settings=settings, approved_destinations=approved)
     if provider is TelephonyProvider.PLIVO:
         return PlivoAdapter(settings=settings, approved_destinations=approved)
+    if provider is TelephonyProvider.TWILIO:
+        return TwilioAdapter(settings=settings, approved_destinations=approved)
     raise MissingCredentialError(
         variable="TELEPHONY_PROVIDER",
         needed_for=f"call control -- {provider.value} has no adapter",
@@ -319,7 +441,9 @@ __all__ = (
     "ExotelAdapter",
     "HttpTelephonyAdapter",
     "PlivoAdapter",
+    "TwilioAdapter",
     "assert_approved_destination",
     "build_adapter",
     "verify_signature",
+    "websocket_url",
 )

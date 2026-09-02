@@ -40,7 +40,7 @@ export function FinishedTable({ rows }: { rows: RecentCall[] }) {
               <span className="font-mono text-small text-muted">{formatTime(row.startedAt)}</span>
             </Td>
             <Td>
-              <Link href={`/calls/${row.id}`} lang="hi" className="font-medium hover:underline">
+              <Link href={`/calls/${row.id}`} className="font-medium hover:underline">
                 {row.farmerName ?? t("unknownFarmer")}
               </Link>
             </Td>

@@ -150,7 +150,7 @@ export function CampaignBoard({
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2.5">
-              <span lang="hi" className="text-xl font-semibold">
+              <span className="text-xl font-semibold">
                 {state.name}
               </span>
               <CampaignChip status={state.status} />

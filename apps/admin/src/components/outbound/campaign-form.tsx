@@ -70,7 +70,7 @@ export function CampaignForm({ flows }: { flows: { id: string; name: string; ver
   return (
     <form action={action} className="flex flex-col gap-4.5">
       <Field label={t("name")}>
-        <input name="name" required maxLength={120} lang="hi" className={inputClass} placeholder={t("namePlaceholder")} />
+        <input name="name" required maxLength={120} className={inputClass} placeholder={t("namePlaceholder")} />
       </Field>
 
       <Field label={t("flow")} hint={t("flowHint")}>

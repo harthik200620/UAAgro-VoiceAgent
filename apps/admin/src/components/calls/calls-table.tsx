@@ -41,7 +41,7 @@ export async function CallsTable({ rows }: { rows: CallRow[] }) {
               </span>
             </Td>
             <Td>
-              <Link href={`/calls/${row.id}`} lang="hi" className="font-medium hover:underline">
+              <Link href={`/calls/${row.id}`} className="font-medium hover:underline">
                 {row.farmerName ?? t("unknownFarmer")}
               </Link>
             </Td>

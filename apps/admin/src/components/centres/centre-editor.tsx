@@ -169,7 +169,7 @@ export function CentreEditor({
         {text("latitude", t("latitude"), { inputMode: "decimal" })}
         {text("longitude", t("longitude"), { inputMode: "decimal" })}
         <Field label={t("managerName")}>
-          <input lang="hi" value={draft.managerName} onChange={set("managerName")} disabled={!canEdit} className={inputClass} />
+          <input value={draft.managerName} onChange={set("managerName")} disabled={!canEdit} className={inputClass} />
         </Field>
         {text("managerNumber", t("managerNumber"), { type: "tel", className: `${inputClass} font-mono` })}
         {text("phone", t("phone"), { type: "tel", className: `${inputClass} font-mono` })}
@@ -235,7 +235,7 @@ export function CentreEditor({
             {stock.map((row) => (
               <li key={row.inventoryId} className="flex items-center justify-between gap-3 border-b border-inset py-2 text-body">
                 <div className="min-w-0">
-                  <div lang="hi" className="truncate font-medium">
+                  <div className="truncate font-medium">
                     {row.productName}
                   </div>
                   <div className="text-label text-muted">

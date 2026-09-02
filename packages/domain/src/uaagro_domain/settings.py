@@ -348,6 +348,8 @@ SECRET_FIELDS: tuple[str, ...] = (
     "telephony_webhook_secret",
     "plivo_auth_id",
     "plivo_auth_token",
+    "twilio_api_key_sid",
+    "twilio_api_key_secret",
     "soniox_api_key",
     "bakbak_api_key",
     "deepgram_api_key",
@@ -429,6 +431,18 @@ class Settings(BaseSettings):
     #: Where the provider reaches this worker: whisper audio, answer callbacks.
     #: Must be the externally-resolvable origin, not the container's.
     public_base_url: str = "http://localhost:8080"
+
+    # Twilio. Authenticated with an API key rather than the account's own
+    # token: a key is scoped, revocable on its own and rotates without
+    # touching anything else. The account SID is still needed -- it is the
+    # account the key acts on and it is in every REST path -- but it is an
+    # identifier, not a credential.
+    twilio_account_sid: str | None = None
+    twilio_api_key_sid: str | None = None
+    twilio_api_key_secret: str | None = None
+    #: The number Twilio calls from, in E.164. Falls back to the promotional
+    #: caller ID when unset, so a single-number setup needs one variable.
+    twilio_from_number: str | None = None
 
     # Plivo, the §21 portability proof. No credentials exist for this project,
     # so the adapter is written and unexercised -- see docs/ARCHITECTURE.md.

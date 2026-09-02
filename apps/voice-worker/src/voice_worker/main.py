@@ -608,7 +608,14 @@ async def internal_test_call(request: Request) -> JSONResponse:
     settings = get_settings()
     try:
         destination = normalise_msisdn(phone).e164
-        caller_id = settings.require("outbound_cli_transactional", needed_for="placing a test call")
+        # Twilio deployments have one number and it is set as the promotional
+        # caller ID; asking for a separate transactional one would refuse a
+        # test call on an account that is otherwise ready to place it.
+        caller_id = (
+            settings.outbound_cli_transactional
+            or settings.twilio_from_number
+            or settings.require("outbound_cli_promotional", needed_for="placing a test call")
+        )
         adapter = build_adapter(settings, approved=frozenset({destination}))
         sid = await adapter.originate(
             to=destination,

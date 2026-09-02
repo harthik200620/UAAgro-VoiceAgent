@@ -34,7 +34,7 @@ export function ContactCard({ contact }: { contact: Contact }) {
   const body = (
     <>
       <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${style.band}`} />
-      <div lang="hi" className="truncate text-small font-semibold text-ink">
+      <div className="truncate text-small font-semibold text-ink">
         {contact.farmerName ?? t("unknown")}
       </div>
       <div className={`font-mono text-micro ${style.text}`}>···{contact.last4}</div>

@@ -158,7 +158,7 @@ async def _stock(
         bucket.append(
             StockRow(
                 inventoryId=str(stock.id),
-                productName=product.name_hi or product.name_en,
+                productName=product.name_en or product.name_hi,
                 variantName=f"{variant.pack_size_value:g} {variant.pack_size_unit}",
                 price=float(stock.selling_price) if stock.selling_price is not None else None,
                 isAvailable=bool(stock.is_available),

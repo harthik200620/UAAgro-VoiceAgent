@@ -56,7 +56,6 @@ export function NewScriptButton({ sourceId }: { sourceId: string | null }) {
         >
           <Field label={t("name")}>
             <input
-              lang="hi"
               value={name}
               onChange={(event) => setName(event.target.value)}
               required

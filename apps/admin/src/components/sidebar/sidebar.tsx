@@ -33,8 +33,8 @@ export async function Sidebar({ session }: { session: Session }) {
         </div>
         <div className="leading-tight">
           <div className="text-prose font-semibold leading-tight tracking-[-0.01em]">UA Agro</div>
-          <div lang="hi" className="text-meta text-muted">
-            किसान सेवा केंद्र
+          <div className="text-meta text-muted">
+            Kisan Sewa Kendra
           </div>
         </div>
       </div>

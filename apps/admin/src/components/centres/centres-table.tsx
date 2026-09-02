@@ -144,7 +144,7 @@ function CentreRows({
           </button>
         </Td>
         <Td>
-          <span lang="hi" className="whitespace-nowrap">
+          <span className="whitespace-nowrap">
             {centre.managerName ?? "—"}
           </span>
         </Td>
@@ -166,7 +166,6 @@ function CentreRows({
               {centre.stock.map((item) => (
                 <span
                   key={item.inventoryId}
-                  lang="hi"
                   className={clsx(
                     "inline-flex items-center gap-1 rounded-tag px-[7px] py-0.5 text-meta",
                     item.isAvailable ? "bg-green-bg text-green-text" : "bg-red-bg text-red-text",

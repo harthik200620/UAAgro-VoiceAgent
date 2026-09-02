@@ -96,19 +96,26 @@ def _custom_values(extra: dict[str, Any]) -> list[str]:
     """Every string the provider echoed back from the originate request.
 
     Exotel echoes the originate request's ``CustomField`` under
-    ``custom_parameters`` in the start frame; the flattened spellings are kept
-    for providers that pass the field through as-is.
+    ``custom_parameters`` at the top of the start frame; Twilio echoes the
+    ``<Parameter>`` elements of the TwiML under ``start.customParameters``,
+    one level down. Both are read, along with the flattened spellings, because
+    a call whose contact is not found is greeted as a helpline call -- the
+    farmer hears the wrong script and the contact card never updates.
     """
     candidates: list[str] = []
-    custom = extra.get("custom_parameters")
-    if isinstance(custom, dict):
-        candidates.extend(str(v) for v in custom.values())
-    elif isinstance(custom, str):
-        candidates.append(custom)
-    for key in ("CustomField", "custom_field", "customField"):
-        value = extra.get(key)
-        if isinstance(value, str):
-            candidates.append(value)
+    nested = extra.get("start")
+    scopes = [extra, nested if isinstance(nested, dict) else {}]
+    for scope in scopes:
+        for key in ("custom_parameters", "customParameters"):
+            custom = scope.get(key)
+            if isinstance(custom, dict):
+                candidates.extend(str(v) for v in custom.values())
+            elif isinstance(custom, str):
+                candidates.append(custom)
+        for key in ("CustomField", "custom_field", "customField"):
+            value = scope.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
     return candidates
 
 

@@ -213,7 +213,7 @@ function DocumentRows({
         <Td>
           <span className="inline-flex items-center gap-2.5">
             <Icon name="file" className="text-muted" />
-            <span lang="hi" className="font-medium">
+            <span className="font-medium">
               {doc.title}
             </span>
           </span>
