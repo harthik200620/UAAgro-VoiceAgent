@@ -6,7 +6,6 @@ import { getTranslations } from "next-intl/server";
 import { revalidatePath } from "next/cache";
 
 import type { KbDocumentRow, KnowledgeAnswer, KnowledgeScope } from "@/lib/contract";
-import { can } from "@/lib/rbac";
 import {
   addKbUrl,
   askKnowledge,
@@ -16,7 +15,7 @@ import {
   uploadKbDocument,
   type ActionResult,
 } from "@/server/api";
-import { currentSession } from "@/server/session";
+import { guard } from "@/server/guard";
 
 /**
  * The knowledge base: what the agent is allowed to answer from.
@@ -37,10 +36,9 @@ export type UploadState =
 
 export async function addDocument(_previous: UploadState, formData: FormData): Promise<UploadState> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "knowledge.upload")) {
-    return { status: "error", message: t("forbidden") };
-  }
+  const guarded = await guard("knowledge.upload");
+  if (!guarded.ok) return { status: "error", message: guarded.message };
+  const { session } = guarded;
 
   const file = formData.get("file");
   const url = String(formData.get("url") ?? "").trim();
@@ -90,10 +88,9 @@ async function change(
   patch: { isPublished?: boolean; scope?: KnowledgeScope },
 ): Promise<ActionResult<KbDocumentRow>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "knowledge.upload")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("knowledge.upload");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     const row = await patchKbDocument(session, documentId, patch);
     revalidatePath(KNOWLEDGE_PAGE, "page");
@@ -111,10 +108,9 @@ function asScope(value: FormDataEntryValue | null): KnowledgeScope {
 
 export async function removeDocument(documentId: string): Promise<ActionResult<null>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "knowledge.upload")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("knowledge.upload");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     await deleteKbDocument(session, documentId);
     revalidatePath(KNOWLEDGE_PAGE, "page");
@@ -132,10 +128,9 @@ export async function askQuestion(
   direction: "inbound" | "outbound" = "inbound",
 ): Promise<ActionResult<KnowledgeAnswer>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "knowledge.ask")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("knowledge.ask");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   const trimmed = question.trim();
   if (!trimmed) return { ok: false, message: t("askSomething"), code: "validation_error" };
   try {

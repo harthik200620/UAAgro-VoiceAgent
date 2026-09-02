@@ -6,7 +6,6 @@ import { getTranslations } from "next-intl/server";
 import { revalidatePath } from "next/cache";
 
 import type { CentreInput, CentrePatch, CentreRow, StockRow, TransferRules } from "@/lib/contract";
-import { can } from "@/lib/rbac";
 import {
   createCentre,
   failure,
@@ -16,7 +15,7 @@ import {
   updateTransferRules,
   type ActionResult,
 } from "@/server/api";
-import { currentSession } from "@/server/session";
+import { guard } from "@/server/guard";
 
 /**
  * Centres, their managers and their stock -- what the agent tells a farmer
@@ -34,8 +33,9 @@ export type AddCentreState =
 
 export async function addCentre(_previous: AddCentreState, formData: FormData): Promise<AddCentreState> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "centres.edit")) return { status: "error", message: t("forbidden") };
+  const guarded = await guard("centres.edit");
+  if (!guarded.ok) return { status: "error", message: guarded.message };
+  const { session } = guarded;
 
   const text = (key: string) => String(formData.get(key) ?? "").trim();
   const input: CentreInput = {
@@ -73,10 +73,9 @@ export async function addCentre(_previous: AddCentreState, formData: FormData): 
 
 export async function saveCentre(centreId: string, patch: CentrePatch): Promise<ActionResult<CentreRow>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "centres.edit")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("centres.edit");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     const centre = await updateCentre(session, centreId, patch);
     revalidatePath(CENTRES_PAGE, "page");
@@ -88,10 +87,9 @@ export async function saveCentre(centreId: string, patch: CentrePatch): Promise<
 
 export async function loadStock(centreId: string): Promise<ActionResult<StockRow[]>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "centres.view")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("centres.view");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     return { ok: true, value: await getCentreStock(session, centreId) };
   } catch (error) {
@@ -104,10 +102,9 @@ export async function setStockAvailable(
   isAvailable: boolean,
 ): Promise<ActionResult<StockRow>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "inventory.edit")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("inventory.edit");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     const row = await updateInventory(session, inventoryId, { isAvailable });
     revalidatePath(CENTRES_PAGE, "page");
@@ -127,8 +124,9 @@ export async function saveFallbackNumber(
   formData: FormData,
 ): Promise<FallbackState> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "centres.edit")) return { status: "error", message: t("forbidden") };
+  const guarded = await guard("centres.edit");
+  if (!guarded.ok) return { status: "error", message: guarded.message };
+  const { session } = guarded;
 
   const fallbackNumber = String(formData.get("fallbackNumber") ?? "").trim();
   if (!fallbackNumber) return { status: "error", message: t("numberRequired") };

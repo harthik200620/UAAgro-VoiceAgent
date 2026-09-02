@@ -26,7 +26,7 @@ import {
   type ActionResult,
   type Failure,
 } from "@/server/api";
-import { currentSession } from "@/server/session";
+import { guard } from "@/server/guard";
 
 /**
  * Outbound campaigns: creating one from a pasted list, and driving it.
@@ -49,10 +49,9 @@ export async function createCampaignAction(
   formData: FormData,
 ): Promise<CreateCampaignState> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "campaigns.create")) {
-    return { status: "error", message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("campaigns.create");
+  if (!guarded.ok) return { status: "error", message: guarded.message, code: guarded.code };
+  const { session } = guarded;
 
   const name = String(formData.get("name") ?? "").trim();
   const flowId = String(formData.get("flowId") ?? "");
@@ -93,8 +92,11 @@ export async function createCampaignAction(
 /** Approve, then start. Returns only on failure: success navigates to the campaign. */
 export async function approveAndStart(campaignId: string): Promise<Failure> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "campaigns.approve") || !can(session, "campaigns.control")) {
+  // Approving and starting in one gesture, so both permissions are required.
+  const guarded = await guard("campaigns.approve");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
+  if (!can(session, "campaigns.control")) {
     return { ok: false, message: t("forbidden"), code: "forbidden" };
   }
   try {
@@ -120,11 +122,10 @@ export async function controlCampaign(
   control: CampaignControl,
 ): Promise<ActionResult<CampaignSummary>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
   const needed = control === "approve" ? "campaigns.approve" : "campaigns.control";
-  if (!session || !can(session, needed)) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard(needed);
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     const campaign = await CONTROLS[control](session, campaignId, randomUUID());
     revalidatePath(CAMPAIGN_PAGE, "page");
@@ -139,10 +140,9 @@ export async function setCampaignConcurrency(
   maxConcurrent: number,
 ): Promise<ActionResult<CampaignSummary>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "campaigns.control")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("campaigns.control");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     const campaign = await updateCampaign(session, campaignId, { maxConcurrent });
     revalidatePath(CAMPAIGN_PAGE, "page");
@@ -162,10 +162,9 @@ export async function setCampaignConcurrency(
  */
 export async function readContacts(formData: FormData): Promise<ActionResult<ExtractedContacts>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "campaigns.create")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("campaigns.create");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) {
     return { ok: false, message: t("nothingToAdd"), code: "validation_error" };

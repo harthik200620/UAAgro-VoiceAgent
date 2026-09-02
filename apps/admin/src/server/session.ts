@@ -30,10 +30,24 @@ import { ROLES } from "@/lib/rbac";
 
 export const SESSION_COOKIE = "uaagro_session";
 
-export const currentSession = cache(async (): Promise<Session | null> => {
+/**
+ * Why there is no session, when there is none.
+ *
+ * "Signed out" and "the control plane did not answer" are different events
+ * with different remedies, and collapsing them into `null` made every Server
+ * Action tell an operator *"Your account cannot do this"* during a restart of
+ * the API — a permissions sentence for an outage. The layout still only needs
+ * to know whether to render a signed-in shell; the actions need to know why.
+ */
+export type SessionState =
+  | { kind: "signed-in"; session: Session }
+  | { kind: "signed-out" }
+  | { kind: "unreachable" };
+
+export const resolveSession = cache(async (): Promise<SessionState> => {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
-  if (!token) return null;
+  if (!token) return { kind: "signed-out" };
 
   try {
     const { env } = await import("./env");
@@ -43,7 +57,7 @@ export const currentSession = cache(async (): Promise<Session | null> => {
       headers: { authorization: `Bearer ${token}` },
       cache: "no-store",
     });
-    if (!response.ok) return null;
+    if (!response.ok) return { kind: "signed-out" };
 
     // The API's own shape, snake_case, mapped here rather than renamed there.
     // `/auth/me` is the control plane's contract with every client, and bending
@@ -54,22 +68,38 @@ export const currentSession = cache(async (): Promise<Session | null> => {
       centre_ids?: string[];
       full_name?: string;
     };
-    if (!payload.id || !isRole(payload.role)) return null;
+    if (!payload.id || !isRole(payload.role)) return { kind: "signed-out" };
 
     return {
-      userId: payload.id,
-      role: payload.role,
-      centreIds: payload.centre_ids ?? [],
-      name: payload.full_name ?? "",
-      accessToken: token,
+      kind: "signed-in",
+      session: {
+        userId: payload.id,
+        role: payload.role,
+        centreIds: payload.centre_ids ?? [],
+        name: payload.full_name ?? "",
+        accessToken: token,
+      },
     };
   } catch {
-    // A control-plane outage signs everyone out rather than failing open with
-    // a fabricated session. Losing the panel during an outage is bad; granting
-    // an unauthenticated user a role during one is worse.
-    return null;
+    // A control-plane outage never fabricates a session: losing the panel
+    // during an outage is bad, granting an unauthenticated user a role during
+    // one is worse. It is reported as an outage rather than as a sign-out, so
+    // that what the operator is told matches what happened.
+    return { kind: "unreachable" };
   }
 });
+
+/**
+ * The signed-in user, or `null`.
+ *
+ * What a layout or a page needs: whether to render the panel or the
+ * signed-out shell. A Server Action about to refuse something should use
+ * `resolveSession` instead, so it can say which of the two refusals it is.
+ */
+export async function currentSession(): Promise<Session | null> {
+  const state = await resolveSession();
+  return state.kind === "signed-in" ? state.session : null;
+}
 
 /**
  * Store the access token after a successful sign-in.

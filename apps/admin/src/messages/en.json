@@ -406,7 +406,9 @@
     "badPhone": "Enter a phone number with 10 to 13 digits.",
     "testCallFailed": "The test call could not be placed.",
     "dsnRequired": "Paste a connection string to test.",
-    "testFailed": "The connection could not be tested."
+    "testFailed": "The connection could not be tested.",
+    "signedOut": "Your sign-in has ended. Sign in again.",
+    "controlPlaneDown": "The control plane is not answering. Nothing was changed; try again in a moment."
   },
   "inbound": {
     "title": "Inbound",

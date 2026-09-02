@@ -6,7 +6,6 @@ import { getTranslations } from "next-intl/server";
 import { revalidatePath } from "next/cache";
 
 import type { FlowPreview, FlowScript } from "@/lib/contract";
-import { can } from "@/lib/rbac";
 import {
   createFlowVersion,
   failure,
@@ -17,7 +16,7 @@ import {
   updateFlow,
   type ActionResult,
 } from "@/server/api";
-import { currentSession } from "@/server/session";
+import { guard } from "@/server/guard";
 
 /**
  * Scripts: what the agent says, versioned.
@@ -47,10 +46,9 @@ export async function saveScript(
   isPublished: boolean,
 ): Promise<ActionResult<Saved>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "flows.edit")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("flows.edit");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     const saved = isPublished
       ? await createFlowVersion(session, flowId, { script }, randomUUID())
@@ -72,10 +70,9 @@ export async function publishScript(
   isPublished: boolean,
 ): Promise<ActionResult<Saved>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "flows.publish")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("flows.publish");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     let target = flowId;
     if (script) {
@@ -99,10 +96,9 @@ export async function createScriptFrom(
   name: string,
 ): Promise<ActionResult<{ id: string }>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "flows.edit")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("flows.edit");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   const trimmed = name.trim();
   if (!trimmed) return { ok: false, message: t("nameRequired"), code: "validation_error" };
   try {
@@ -123,10 +119,9 @@ export async function createScriptFrom(
 /** Restore = a new draft with an old version's words. Nothing is overwritten. */
 export async function restoreVersion(versionId: string): Promise<ActionResult<{ id: string }>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "flows.edit")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("flows.edit");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     const source = await getFlow(session, versionId);
     const draft = await createFlowVersion(
@@ -144,10 +139,9 @@ export async function restoreVersion(versionId: string): Promise<ActionResult<{ 
 
 export async function previewScript(flowId: string, text: string): Promise<ActionResult<FlowPreview>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "flows.edit")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("flows.edit");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   try {
     return { ok: true, value: await previewFlow(session, flowId, text) };
   } catch (error) {
@@ -158,10 +152,9 @@ export async function previewScript(flowId: string, text: string): Promise<Actio
 /** A real call to the operator's own phone. 503 arrives with the API's remedy, shown as it is. */
 export async function testCall(flowId: string, phone: string): Promise<ActionResult<{ callSid: string }>> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "flows.edit")) {
-    return { ok: false, message: t("forbidden"), code: "forbidden" };
-  }
+  const guarded = await guard("flows.edit");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
   const digits = phone.replace(/\D/g, "");
   if (digits.length < 10 || digits.length > 13) {
     return { ok: false, message: t("badPhone"), code: "validation_error" };

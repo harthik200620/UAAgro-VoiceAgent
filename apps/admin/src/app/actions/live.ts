@@ -1,9 +1,8 @@
 "use server";
 
 import type { CallEvent, TurnEvent } from "@/lib/contract";
-import { can } from "@/lib/rbac";
 import { getCall } from "@/server/api";
-import { currentSession } from "@/server/session";
+import { guard } from "@/server/guard";
 
 /**
  * The transcript so far of a call that began before the page opened.
@@ -16,10 +15,13 @@ import { currentSession } from "@/server/session";
 export async function loadCallHistory(
   callId: string,
 ): Promise<{ turns: TurnEvent[]; events: CallEvent[] } | null> {
-  const session = await currentSession();
-  if (!session || !can(session, "calls.view")) return null;
+  // The only caller that answers `null` for all three refusals, and rightly:
+  // it back-fills a transcript the stream will fill anyway, so there is
+  // nothing to tell the operator and nothing to interrupt them with.
+  const guarded = await guard("calls.view");
+  if (!guarded.ok) return null;
   try {
-    const call = await getCall(session, callId);
+    const call = await getCall(guarded.session, callId);
     return { turns: call.turns, events: call.events };
   } catch {
     // The live view is not worth breaking for missing history; the turns

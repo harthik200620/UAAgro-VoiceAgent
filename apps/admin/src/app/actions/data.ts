@@ -3,9 +3,8 @@
 import { getTranslations } from "next-intl/server";
 
 import type { ConnectionTest } from "@/lib/contract";
-import { can } from "@/lib/rbac";
 import { failure, testConnection } from "@/server/api";
-import { currentSession } from "@/server/session";
+import { guard } from "@/server/guard";
 
 /**
  * "Test" on the Data screen. The DSN goes from the form to the API and
@@ -23,10 +22,9 @@ export async function testDatabaseConnection(
   formData: FormData,
 ): Promise<ConnectionTestState> {
   const t = await getTranslations("actions");
-  const session = await currentSession();
-  if (!session || !can(session, "data.connection")) {
-    return { status: "error", message: t("forbidden") };
-  }
+  const guarded = await guard("data.connection");
+  if (!guarded.ok) return { status: "error", message: guarded.message };
+  const { session } = guarded;
   const dsn = String(formData.get("dsn") ?? "").trim();
   if (!dsn) return { status: "error", message: t("dsnRequired") };
   try {
