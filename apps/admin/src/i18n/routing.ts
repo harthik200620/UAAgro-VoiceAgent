@@ -14,12 +14,21 @@ import { defineRouting } from "next-intl/routing";
  *
  * The choice lives in the URL prefix rather than in the session, so a Hindi
  * link pasted into a chat opens in Hindi for whoever follows it.
+ *
+ * The panel opens in English. `localeDetection` is off so that a browser
+ * whose language list happens to start with Hindi is not routed there
+ * uninvited; Hindi is the switch in the sidebar, and `middleware.ts` remembers
+ * that choice for the next visit.
  */
 export const routing = defineRouting({
   locales: ["en", "hi"],
   defaultLocale: "en",
   localePrefix: "always",
+  localeDetection: false,
 });
+
+/** Where the sidebar switch records the language, read for the next visit to `/`. */
+export const LOCALE_COOKIE = "NEXT_LOCALE";
 
 export type Locale = (typeof routing.locales)[number];
 

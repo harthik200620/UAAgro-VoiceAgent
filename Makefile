@@ -42,7 +42,7 @@ dev-local:  ## bring up the stack WITHOUT Docker (embedded Postgres)
 	@echo "  now, in three terminals:"
 	@echo "    1)  set -a; . ./.localdev/env; set +a; uv run uvicorn api.main:app --port 8000"
 	@echo "    2)  cd apps/admin && npx next dev -p 3000"
-	@echo "    3)  open http://localhost:3000/hi/login"
+	@echo "    3)  open http://localhost:3000/en/login"
 	@echo
 	@echo "  sign in as admin@uaagro.in / DevOnly!Passw0rd"
 	@echo "  two-factor is mandatory (§17); 'make totp' prints the code."

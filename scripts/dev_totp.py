@@ -26,7 +26,7 @@ def main() -> int:
     if not SECRET_FILE.exists():
         sys.stderr.write(
             f"No secret at {SECRET_FILE}.\n"
-            "Sign in once at http://localhost:3000/hi/login -- the panel shows "
+            "Sign in once at http://localhost:3000/en/login -- the panel shows "
             "the setup key on first sign-in.\n"
         )
         return 1

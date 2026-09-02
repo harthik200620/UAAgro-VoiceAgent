@@ -603,28 +603,29 @@ away is abandoned. The agent now says "one moment" after 750 ms, from cache,
 under a lock that guarantees it can never talk over the answer it is covering
 for.
 
-### The UI is English; the data is not
+### The panel opens in English; the data is never translated
 
-§15 asks for a Hindi and English panel with Hindi as the default. The panel now
-ships English chrome only, by decision: every label, heading, column and button
-is English, and everything the panel *displays* stays in the language it was
+§15 asks for a Hindi and English panel. Both are built and complete
+(`messages/en.json`, `messages/hi.json`, the Hindi written for centre managers
+in the districts), and the panel opens in English by the customer's decision:
+`/` goes to `/en`, the sidebar switch goes to `/hi`, and the switch leaves a
+cookie so this browser opens in Hindi next time. Automatic detection is off --
+a browser whose language list happens to start with Hindi is not a choice the
+operator made. Everything the panel *displays* stays in the language it was
 written or spoken in -- farmer names and villages in Devanagari, product names
 as the catalogue holds them, prompts and greetings exactly as published, call
 transcripts in the language of the call. Translating those in the view would
 misrepresent both what is in the database and what the farmer actually heard.
 
-Three details that make it more than a string swap:
+Two details that make it more than a string swap:
 
 - **Dates and numbers are formatted `en-IN`, not `en`.** US English renders
   1 September as "9/1/2026", which an operator in Lucknow reads as 9 January.
 - **Devanagari cells carry `lang="hi"`.** Inside a page whose root is
   `lang="en"`, unmarked Hindi is read by a screen reader with English phonemes,
   and the browser may pick a font with no Devanagari coverage.
-- **`messages/hi.json` is kept, complete.** Re-enabling Hindi is one line in
-  `i18n/routing.ts`; deleting the translation would make that a rewrite.
 
-`/hi/...` paths redirect to `/en/...` rather than 404, because links to them
-exist. That redirect also uncovered a **pre-existing middleware bug**: the
+The locale prefixes also uncovered a **pre-existing middleware bug**: the
 matcher `"/((?!api|_next|_vercel|.*\..*).*)"` does not mean what it reads as --
 in a TypeScript string `"\."` collapses to `"."`, so the intended "a path
 containing a dot" became "a path of at least one character", and the negative

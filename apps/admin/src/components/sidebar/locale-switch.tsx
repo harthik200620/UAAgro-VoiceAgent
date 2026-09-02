@@ -3,11 +3,20 @@
 import { clsx } from "clsx";
 import { useLocale } from "next-intl";
 
-import { Link, routing, usePathname } from "@/i18n/routing";
+import { LOCALE_COOKIE, Link, routing, usePathname } from "@/i18n/routing";
 
 const NAMES = { en: "EN", hi: "हिं" } as const;
 
-/** EN / हिं: two links to the same page in the other language. */
+/**
+ * EN / हिं: two links to the same page in the other language.
+ *
+ * Clicking one also records the choice in a cookie, so the next visit to the
+ * bare address opens in that language rather than in the default.
+ */
+function remember(locale: string) {
+  document.cookie = `${LOCALE_COOKIE}=${locale}; path=/; max-age=31536000; samesite=lax`;
+}
+
 export function LocaleSwitch({ label }: { label: string }) {
   const current = useLocale();
   const pathname = usePathname();
@@ -26,6 +35,7 @@ export function LocaleSwitch({ label }: { label: string }) {
             href={pathname}
             locale={locale}
             lang={locale}
+            onClick={() => remember(locale)}
             aria-current={active ? "true" : undefined}
             className={clsx(
               "flex-1 py-[7px] text-center text-small",
