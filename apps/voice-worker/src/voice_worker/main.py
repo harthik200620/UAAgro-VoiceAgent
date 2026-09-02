@@ -339,6 +339,40 @@ async def metrics() -> Response:
     return Response(content=body, media_type=content_type)
 
 
+@app.api_route("/telephony/twiml", methods=["GET", "POST"])
+async def telephony_twiml(request: Request) -> Response:
+    """The document Twilio fetches when a call we placed is answered.
+
+    Twilio accepts either a TwiML document inline on the dial request or a URL
+    to fetch one from. Inline is the tidier of the two -- nothing to host,
+    nothing to keep in sync -- but a **trial account refuses it**: every
+    request carrying `Twiml` comes back
+    *"Invalid or disallowed parameters provided"*. So the document is served
+    here instead, which is the arrangement Exotel and Plivo already use and
+    which works on every Twilio account.
+
+    Guarded by the same shared secret as the media socket. Without it, anyone
+    who found this address would be handed a stream URL with the socket's
+    token in it, which is the one thing on this worker worth stealing.
+    """
+    settings = get_settings()
+    expected = settings.telephony_ws_token
+    if expected:
+        presented = request.query_params.get("token") or request.headers.get("x-auth-token")
+        if presented is None or not hmac.compare_digest(presented, expected):
+            log.warning("worker.twiml_rejected", reason="token")
+            return Response(status_code=status.HTTP_403_FORBIDDEN)
+
+    from .adapters.telephony.control import stream_twiml
+
+    # The campaign contact, opaque and ours: `contact:<uuid>` or `test:<uuid>`.
+    # Never a phone number -- §23-6 has no exception for a query string.
+    reference = request.query_params.get("contact")
+    document = stream_twiml(settings, reference if reference else None)
+    log.info("worker.twiml_served", referenced=bool(reference))
+    return Response(content=document, media_type="application/xml")
+
+
 @app.get("/health/live")
 async def health_live() -> JSONResponse:
     return JSONResponse({"status": "ok"})

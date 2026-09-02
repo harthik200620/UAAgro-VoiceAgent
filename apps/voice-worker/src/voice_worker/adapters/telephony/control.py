@@ -294,37 +294,18 @@ class TwilioAdapter(HttpTelephonyAdapter):
         self, *, to: str, from_: str, callback_url: str, custom_field: str | None = None
     ) -> str:
         destination = assert_approved_destination(to, self.approved_destinations)
-        # `callback_url` is the answer webhook the other providers need. Twilio
-        # is told what to do directly, so it is used only to derive the media
-        # host when `public_base_url` has not been set to the same place.
+        # `callback_url` is the answer webhook the other providers are given.
+        # Twilio is pointed at this worker's own TwiML route instead, so that
+        # one address serves every call and the dial request carries nothing
+        # but the three parameters a trial account is allowed to send.
         del callback_url
         body = await self._post(
             "/Calls.json",
-            {
-                "To": destination,
-                "From": from_,
-                "Twiml": self._stream_twiml(custom_field),
-                "Timeout": RING_TIMEOUT_S,
-                # A call that somehow outlives the conversation is stopped by
-                # the provider rather than billed until somebody notices.
-                "TimeLimit": 900,
-            },
+            {"To": destination, "From": from_, "Url": twiml_url(self.settings, custom_field)},
         )
         sid = str(body.get("sid", ""))
         log.info("telephony.originated", provider=self.provider.value, sid=sid)
         return sid
-
-    def _stream_twiml(self, custom_field: str | None) -> str:
-        """`<Connect><Stream>` pointed at this worker's voice socket."""
-        url = websocket_url(self.settings)
-        parameter = ""
-        if custom_field:
-            parameter = f"<Parameter name={quoteattr('contact')} value={quoteattr(custom_field)}/>"
-        stream = f"<Stream url={quoteattr(url)}>{parameter}</Stream>"
-        return (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            f"<Response><Connect>{stream}</Connect></Response>"
-        )
 
     async def transfer(self, *, call_sid: str, to: str, whisper_text: str | None = None) -> None:
         destination = assert_approved_destination(to, self.approved_destinations)
@@ -354,6 +335,41 @@ class TwilioAdapter(HttpTelephonyAdapter):
 
     async def hangup(self, *, call_sid: str) -> None:
         await self._post(f"/Calls/{call_sid}.json", {"Status": "completed"})
+
+
+def stream_twiml(settings: Settings, reference: str | None) -> str:
+    """`<Connect><Stream>` pointed at this worker's voice socket.
+
+    Served by the worker's `/telephony/twiml` route rather than sent inline on
+    the dial request: a Twilio trial account refuses a request carrying
+    `Twiml`, and one address that every call fetches is also one place to fix
+    when the stream host changes.
+
+    ``reference`` is the campaign contact or the test configuration --
+    `contact:<uuid>`, `test:<uuid>` -- which Twilio returns in the start
+    frame's `customParameters`, and which is how a call finds its contact card.
+    """
+    parameter = ""
+    if reference:
+        parameter = f"<Parameter name={quoteattr('contact')} value={quoteattr(reference)}/>"
+    stream = f"<Stream url={quoteattr(websocket_url(settings))}>{parameter}</Stream>"
+    return f'<?xml version="1.0" encoding="UTF-8"?><Response><Connect>{stream}</Connect></Response>'
+
+
+def twiml_url(settings: Settings, reference: str | None) -> str:
+    """Where Twilio fetches that document, carrying the socket's shared secret.
+
+    The reference is an identifier of ours, never a phone number: §23-6 does
+    not stop applying because the value is in a query string.
+    """
+    base = settings.public_base_url.rstrip("/")
+    query: list[str] = []
+    if settings.telephony_ws_token:
+        query.append(f"token={quote(settings.telephony_ws_token, safe='')}")
+    if reference:
+        query.append(f"contact={quote(reference, safe='')}")
+    suffix = f"?{'&'.join(query)}" if query else ""
+    return f"{base}/telephony/twiml{suffix}"
 
 
 def websocket_url(settings: Settings) -> str:
@@ -444,6 +460,8 @@ __all__ = (
     "TwilioAdapter",
     "assert_approved_destination",
     "build_adapter",
+    "stream_twiml",
+    "twiml_url",
     "verify_signature",
     "websocket_url",
 )

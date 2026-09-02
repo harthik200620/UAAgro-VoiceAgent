@@ -2,9 +2,20 @@
 
 Twilio is wired as a third telephony provider beside Exotel and Plivo: the
 same media socket, the same agent, the same panel. What differs is that
-Twilio is *told what to do* rather than pointed at a configuration — the
-dialer sends TwiML with `<Connect><Stream>` inline, so there is no webhook to
-host for outbound calls and nothing to keep in sync with the dialer.
+Twilio is *told what to do* rather than pointed at a configuration — it is
+given TwiML, and `<Connect><Stream>` is the verb that opens a two-way media
+stream.
+
+That document is **served by the worker** at `/telephony/twiml`, not sent
+inline on the dial request. Inline is tidier and was tried first, but a trial
+account refuses it: any request carrying `Twiml` comes back
+*"Invalid or disallowed parameters provided - trial accounts have limited
+parameter access"*, and the message names no parameter. `Timeout` and
+`TimeLimit` are refused the same way. Three parameters — `To`, `From`, `Url`
+— work on every account, so those are the three the dialer sends.
+
+The route is gated on `TELEPHONY_WS_TOKEN`, because whoever can fetch that
+document is handed the media socket's token.
 
 ## What is already set
 

@@ -21,7 +21,13 @@ import pytest
 from uaagro_domain.enums import CallDirection, TelephonyProvider
 from uaagro_domain.errors import AuthorizationError
 from uaagro_domain.settings import Settings
-from voice_worker.adapters.telephony.control import TwilioAdapter, build_adapter, websocket_url
+from voice_worker.adapters.telephony.control import (
+    TwilioAdapter,
+    build_adapter,
+    stream_twiml,
+    twiml_url,
+    websocket_url,
+)
 from voice_worker.adapters.telephony.mulaw_providers import TwilioSerializer
 from voice_worker.runtime.direction import OurNumbers, classify_direction
 
@@ -94,7 +100,11 @@ def test_no_token_means_no_query_string() -> None:
 # --------------------------------------------------------------------------- #
 
 
-async def test_the_call_is_told_to_connect_the_stream_to_this_worker() -> None:
+async def test_the_dial_request_carries_only_what_a_trial_account_allows() -> None:
+    """The reason this is asserted so narrowly: a Twilio trial account refuses
+    a dial request carrying `Twiml`, `Timeout` or `TimeLimit` with
+    *"Invalid or disallowed parameters provided"*, and the refusal names none
+    of them. Three parameters work on every account."""
     twilio, recorder = adapter()
     contact = f"contact:{uuid.uuid4()}"
 
@@ -105,30 +115,48 @@ async def test_the_call_is_told_to_connect_the_stream_to_this_worker() -> None:
     assert sid.startswith("CA")
     path, data = recorder.calls[0]
     assert path == "/Calls.json"
+    assert set(data) == {"To", "From", "Url"}
     assert data["To"] == FARMER
     assert data["From"] == OURS
-    twiml = data["Twiml"]
+    assert data["Url"].startswith("https://voice.example.com/telephony/twiml?")
+    assert "token=ws-token" in data["Url"]
+    assert f"contact=contact%3A{contact.split(':')[1]}" in data["Url"]
+
+
+async def test_a_call_with_no_contact_names_none() -> None:
+    twilio, recorder = adapter()
+    await twilio.originate(to=FARMER, from_=OURS, callback_url="", custom_field=None)
+    assert "contact=" not in recorder.calls[0][1]["Url"]
+
+
+def test_the_document_connects_the_stream_to_this_worker() -> None:
+    contact = f"contact:{uuid.uuid4()}"
+    twiml = stream_twiml(settings(), contact)
     assert "<Connect>" in twiml and "<Stream " in twiml
     assert 'url="wss://voice.example.com/ws/voice?token=ws-token"' in twiml
     # The contact rides as a parameter, which is where the start frame carries
     # it back and where `runtime.direction` looks for it.
     assert f'<Parameter name="contact" value="{contact}"/>' in twiml
+    assert "<Parameter" not in stream_twiml(settings(), None)
 
 
-async def test_a_call_with_no_contact_carries_no_parameter() -> None:
-    twilio, recorder = adapter()
-    await twilio.originate(to=FARMER, from_=OURS, callback_url="", custom_field=None)
-    assert "<Parameter" not in recorder.calls[0][1]["Twiml"]
-
-
-async def test_the_stream_url_is_quoted_as_an_attribute() -> None:
+def test_the_stream_url_is_quoted_as_an_attribute() -> None:
     """A raw ampersand in an attribute is not well-formed XML, and Twilio
     rejects the document rather than the parameter."""
-    twilio, recorder = adapter(telephony_ws_token="a&b")
-    await twilio.originate(to=FARMER, from_=OURS, callback_url="", custom_field=None)
-    twiml = recorder.calls[0][1]["Twiml"]
+    twiml = stream_twiml(settings(telephony_ws_token="a&b"), None)
     assert "token=a%26b" in twiml
     assert "&&" not in twiml
+
+
+def test_the_twiml_address_carries_the_shared_secret() -> None:
+    """Whoever fetches that document is handed the socket's token, so the
+    address that serves it is itself gated on the token."""
+    url = twiml_url(settings(), "test:abc")
+    assert url.startswith("https://voice.example.com/telephony/twiml?")
+    assert "token=ws-token" in url
+    assert twiml_url(settings(telephony_ws_token=None), None) == (
+        "https://voice.example.com/telephony/twiml"
+    )
 
 
 async def test_an_unapproved_destination_is_never_dialled() -> None:
@@ -148,6 +176,9 @@ async def test_a_transfer_redirects_the_live_call_to_the_manager() -> None:
     await twilio.transfer(call_sid="CA123", to=FARMER, whisper_text="context")
     path, data = recorder.calls[0]
     assert path == "/Calls/CA123.json"
+    # Inline TwiML, which a paid account takes and a trial account refuses --
+    # see docs/TWILIO.md. A transfer is an inbound-helpline path, not one a
+    # trial account is used for.
     assert f"<Number>{FARMER}</Number>" in data["Twiml"]
 
 
