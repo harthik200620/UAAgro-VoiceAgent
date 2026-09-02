@@ -408,6 +408,11 @@ class Settings(BaseSettings):
     exotel_api_key: str | None = None
     exotel_api_token: str | None = None
     exotel_subdomain: str = "api.exotel.com"
+    #: The App Bazaar flow that runs when an outbound call is answered -- the
+    #: one holding the Voicebot applet pointed at this worker's socket.
+    #: Exotel's connect API takes a flow address, not a stream address, and a
+    #: call given the wrong one connects to silence.
+    exotel_app_id: str | None = None
     inbound_did: str | None = None
     outbound_cli_promotional: str | None = None
     outbound_cli_transactional: str | None = None

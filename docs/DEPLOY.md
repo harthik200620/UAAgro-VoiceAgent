@@ -75,10 +75,16 @@ is loaded the knowledge base answers from word matching only and the panel's
 
 ## 4. Point the telephony at it
 
-In Exotel, create a **Voicebot** applet pointed at
+In Exotel, create a flow in **App Bazaar** containing a **Voicebot** applet pointed at
 `wss://voice.<domain>/ws/voice?token=<TELEPHONY_WS_TOKEN>`, followed by a Hangup
-applet, and attach it to the inbound DID. Outbound calls use the same applet:
-the dialer places the call and Exotel connects the farmer to the same socket.
+applet, and attach it to the inbound DID.
+
+Outbound calls use the same flow, and this is the step people miss: Exotel's
+connect API is given the address of the **flow**, not of the socket. Take the
+flow's numeric id from its URL — `my.exotel.com/<sid>/exoml/start_voice/<id>`
+— and set it as `EXOTEL_APP_ID`. A dial that is handed the stream address
+instead is accepted, rings, connects to silence and bills; the dialer refuses
+to place a call without the flow id for that reason.
 
 Set `TELEPHONY_IP_ALLOWLIST` to Exotel's published media IP ranges so the socket
 accepts nobody else.

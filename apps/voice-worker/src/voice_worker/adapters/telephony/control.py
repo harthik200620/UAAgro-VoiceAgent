@@ -167,10 +167,15 @@ class ExotelAdapter(HttpTelephonyAdapter):
         self, *, to: str, from_: str, callback_url: str, custom_field: str | None = None
     ) -> str:
         destination = assert_approved_destination(to, self.approved_destinations)
+        # Exotel connects the answered call to a *flow*, not to a socket. The
+        # flow is the one holding the Voicebot applet, and the applet is what
+        # knows this worker's address; handing this API the stream address
+        # instead produces a call that connects to nothing.
+        del callback_url
         request: dict[str, Any] = {
             "From": destination,
             "CallerId": from_,
-            "Url": callback_url,
+            "Url": flow_url(self.settings),
             "TimeLimit": 900,
             "TimeOut": RING_TIMEOUT_S,
         }
@@ -345,6 +350,24 @@ class TwilioAdapter(HttpTelephonyAdapter):
         await self._post(f"/Calls/{call_sid}.json", {"Status": "completed"})
 
 
+def flow_url(settings: Settings) -> str:
+    """The App Bazaar flow Exotel runs when an outbound call is answered.
+
+    `http://my.exotel.com/<sid>/exoml/start_voice/<app_id>` -- the address of
+    a flow in the account, which is where the Voicebot applet lives. Built
+    here rather than configured whole so that the account SID cannot drift
+    apart from the one every other request already uses.
+
+    Raises:
+        MissingCredentialError: naming ``EXOTEL_APP_ID``. A missing flow is
+            worth a loud failure at the dial rather than a call that rings,
+            connects to silence and bills.
+    """
+    sid = settings.require("exotel_sid", needed_for="Exotel call control")
+    app_id = settings.require("exotel_app_id", needed_for="the Voicebot flow an answered call runs")
+    return f"http://my.exotel.com/{sid}/exoml/start_voice/{app_id}"
+
+
 def stream_twiml(settings: Settings, reference: str | None) -> str:
     """`<Connect><Stream>` pointed at this worker's voice socket.
 
@@ -468,6 +491,7 @@ __all__ = (
     "TwilioAdapter",
     "assert_approved_destination",
     "build_adapter",
+    "flow_url",
     "stream_twiml",
     "twiml_url",
     "verify_signature",
