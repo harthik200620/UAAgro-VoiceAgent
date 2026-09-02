@@ -301,7 +301,15 @@ class TwilioAdapter(HttpTelephonyAdapter):
         del callback_url
         body = await self._post(
             "/Calls.json",
-            {"To": destination, "From": from_, "Url": twiml_url(self.settings, custom_field)},
+            {
+                "To": destination,
+                "From": from_,
+                "Url": twiml_url(self.settings, custom_field),
+                "Timeout": RING_TIMEOUT_S,
+                # A call that somehow outlives the conversation is stopped by
+                # the provider rather than billed until somebody notices.
+                "TimeLimit": 900,
+            },
         )
         sid = str(body.get("sid", ""))
         log.info("telephony.originated", provider=self.provider.value, sid=sid)

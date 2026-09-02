@@ -63,6 +63,45 @@ restarted with it — a call placed against a stale address connects to nothing.
 rather than obtained, it goes into the stream URL automatically, and without
 it the worker accepts any connection that finds the address.
 
+## A trial account cannot run this agent
+
+Settled on 3 September 2026, after two real calls that fetched the TwiML and
+then hung up without ever opening the media stream.
+
+Twilio's own documentation for the trial
+(<https://www.twilio.com/docs/usage/trials/try-out-voice>) lists the TwiML
+verbs that are **stripped** from a trial account's documents:
+
+> `<Record>`, `<Stream>`, `<ConversationRelay>`, `<VirtualAgent>`,
+> `<Siprec>`, `<Refer>`, `<Pay>`, `<Recording>` (through `<Start>`/`<Stop>`),
+> `<Dial><Number>`, `<Dial><Sip>`, `<Dial><Application>`,
+> `<Dial><WhatsApp>`, `<Dial><Client>`
+
+`<Stream>` is on it, and `<Stream>` is the whole integration: it is what
+connects the call to the agent. Twilio fetches the document, removes the one
+verb that matters, finds nothing left to do, and ends the call after about
+three seconds. That is exactly what the logs showed — a `200` on
+`/telephony/twiml` from a Twilio IP, and no WebSocket attempt at all.
+
+The same page restricts the dial request itself: during trial the Calls
+resource accepts only `To`, one of four **Twilio-provided** TwiML webhook
+URLs, and `statusCallback`. A custom `Url` is outside that list.
+
+Note that `<Dial><Number>` is stripped too, so a **warm transfer cannot work
+on a trial account either**.
+
+**There is no way to work around this in our code, and no version of the
+adapter that would.** Two ways forward:
+
+- **Upgrade the Twilio account.** Adding funds in the Console lifts the verb
+  restrictions, and everything here works as written — nothing further to
+  change.
+- **Use Exotel**, which is what the platform was built against and what a real
+  campaign needs anyway: promotional calling in India requires a 140-series
+  caller ID, which Twilio cannot supply (see the section below).
+
+The rest of this document assumes an upgraded account.
+
 ## Testing on your own number
 
 **Use Flows → Outbound script → "Test on my phone".** That places one real

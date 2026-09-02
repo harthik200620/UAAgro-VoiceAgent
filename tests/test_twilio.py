@@ -101,10 +101,12 @@ def test_no_token_means_no_query_string() -> None:
 
 
 async def test_the_dial_request_carries_only_what_a_trial_account_allows() -> None:
-    """The reason this is asserted so narrowly: a Twilio trial account refuses
-    a dial request carrying `Twiml`, `Timeout` or `TimeLimit` with
-    *"Invalid or disallowed parameters provided"*, and the refusal names none
-    of them. Three parameters work on every account."""
+    """`Url`, not `Twiml`.
+
+    Inline TwiML is the tidier of the two and was tried first. It is refused
+    on a trial account -- *"Invalid or disallowed parameters provided"*,
+    naming no parameter -- and a hosted document works on every account, so
+    there is one code path rather than two. See docs/TWILIO.md."""
     twilio, recorder = adapter()
     contact = f"contact:{uuid.uuid4()}"
 
@@ -115,7 +117,7 @@ async def test_the_dial_request_carries_only_what_a_trial_account_allows() -> No
     assert sid.startswith("CA")
     path, data = recorder.calls[0]
     assert path == "/Calls.json"
-    assert set(data) == {"To", "From", "Url"}
+    assert set(data) == {"To", "From", "Url", "Timeout", "TimeLimit"}
     assert data["To"] == FARMER
     assert data["From"] == OURS
     assert data["Url"].startswith("https://voice.example.com/telephony/twiml?")
