@@ -9,41 +9,48 @@ host for outbound calls and nothing to keep in sync with the dialer.
 ## What is already set
 
 In `.env`, which is not committed and which the secret scan refuses to let
-anyone commit:
+anyone commit: `TELEPHONY_PROVIDER=twilio`, the API key and its secret, the
+account SID, `TELEPHONY_WS_TOKEN` (generated), and `PUBLIC_BASE_URL` pointing
+at a tunnel.
 
-```
-TELEPHONY_PROVIDER=twilio
-TWILIO_API_KEY_SID=SK…
-TWILIO_API_KEY_SECRET=…
-```
+**The account SID is the one the key reports, not the one first supplied.**
+An API key can only act on the account it was created under, and
+`GET /2010-04-01/Accounts.json` — which any key may call — names it. The SID
+first given returned 404 for that reason. If a call ever fails with 20404,
+this is the first thing to re-check.
+
+The key has been confirmed able to place calls: `POST /Calls.json` with no
+parameters answers `400 Required parameter is missing`, which is the answer a
+credential that *may* create calls gives. A credential that may not answers
+401. Nothing is dialled by that probe, which is why it is the one to use.
 
 ## What is still missing
 
-Three things, and no call can be placed without them.
+One thing: a phone number.
 
-| Variable | What it is | Where to find it |
-|---|---|---|
-| `TWILIO_ACCOUNT_SID` | Starts `AC…`. Not a secret, but every REST path contains it, and an API key cannot say which account it acts on. | Twilio Console home |
-| `TWILIO_FROM_NUMBER` | The Twilio number the call comes from, in E.164 (`+1…`, `+91…`) | Console → Phone Numbers |
-| `PUBLIC_BASE_URL` | The address **Twilio** can reach this worker on, from the public internet | see below |
+The account has none, and a trial account cannot search for one over the
+API — `AvailablePhoneNumbers` answers *"This feature is not available on a
+Trial account"*. It has to be claimed in the Console: **Phone Numbers → Manage
+→ Buy a number**, with Voice capability. A trial balance covers one. Then set
+`TWILIO_FROM_NUMBER` to it in E.164 and restart the voice worker.
 
-`PUBLIC_BASE_URL` is the one people get wrong. Twilio opens the media stream
-itself, from its own network, so `http://localhost:8080` cannot work: there is
-nothing at that address as far as Twilio is concerned, and the call connects
-to silence and hangs up. It needs a public HTTPS origin, which becomes `wss://`
-on the stream. For a test from this machine, a tunnel is enough:
+## The tunnel
 
-```bash
-cloudflared tunnel --url http://localhost:8080
-```
+Twilio opens the media stream itself, from its own network, so
+`http://localhost:8080` cannot work: there is nothing at that address as far
+as Twilio is concerned, and the call connects to silence and hangs up.
+`PUBLIC_BASE_URL` must be a public HTTPS origin, which the dialer turns into
+`wss://` on the stream.
 
-Take the `https://…trycloudflare.com` address it prints and set
-`PUBLIC_BASE_URL` to it, then restart the voice worker. `ngrok http 8080` does
-the same job.
+Either tunnel does the job. `cloudflared tunnel --url http://localhost:8080`
+prints a `trycloudflare.com` address; `ngrok http 8080` prints an
+`ngrok-free.dev` one. Whichever is used, the address **changes every time the
+tunnel restarts**, and `PUBLIC_BASE_URL` has to be updated and the worker
+restarted with it — a call placed against a stale address connects to nothing.
 
-Also set `TELEPHONY_WS_TOKEN` to any random string. It is the shared secret on
-the socket, it goes into the stream URL automatically, and without it the
-worker accepts any connection that finds the address.
+`TELEPHONY_WS_TOKEN` is the shared secret on that socket. It is generated
+rather than obtained, it goes into the stream URL automatically, and without
+it the worker accepts any connection that finds the address.
 
 ## Testing on your own number
 
