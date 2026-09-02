@@ -1,0 +1,47 @@
+# The model gateway (§6.4).
+#
+# One gateway in front of every model, so switching models is a config change
+# rather than a code change -- and so §8's cost accounting has a single place
+# that knows what a call to each model costs.
+#
+# The model *names* here are the contract. `LLM_PRIMARY_MODEL` and
+# `LLM_FALLBACK_MODEL` in the environment name these aliases, not vendor model
+# ids, which is what lets §6.1's fallback ladder move between vendors without
+# the worker learning anything new.
+
+model_list:
+  # Primary. Chosen for time-to-first-token: §7 gives the model 400 ms of a
+  # 900 ms p50 turn, and a larger model spends that before it says anything.
+  - model_name: claude-haiku-4-5-20251001
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+      max_tokens: 220
+      temperature: 0.3
+
+  # Fallback, per §6.1's ladder. Slower and more capable: the ladder steps here
+  # when the primary fails or refuses, and a turn that has already lost its
+  # budget is better answered well than fast.
+  - model_name: claude-sonnet-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      max_tokens: 220
+      temperature: 0.3
+
+litellm_settings:
+  # Retries belong to the gateway, not to the worker: §6.1's ladder decides
+  # when to change *model*, and having both layers retry multiplies the wait a
+  # farmer sits through.
+  num_retries: 1
+  request_timeout: 20
+  drop_params: true
+  # §17 and §23-6: prompts and transcripts must not accumulate in a container
+  # log. The gateway logs the call, its latency and its cost -- not its text.
+  turn_off_message_logging: true
+
+general_settings:
+  master_key: os.environ/LLM_GATEWAY_MASTER_KEY
+  # Health is polled by compose; the background check would add vendor calls
+  # nobody reads.
+  background_health_checks: false

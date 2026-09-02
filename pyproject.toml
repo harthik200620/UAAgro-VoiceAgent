@@ -1,0 +1,136 @@
+[project]
+name = "uaagro-voice"
+version = "0.1.0"
+description = "Voice agent platform for UA Agro Solutions (Naveen Khushhali Kisan Sewa Kendra)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "uaagro-db",
+    "uaagro-domain",
+    "uaagro-api",
+    "uaagro-voice-worker",
+    "uaagro-worker",
+    "uaagro-evals",
+]
+
+[tool.uv.workspace]
+members = [
+    "packages/domain",
+    "packages/db",
+    "packages/evals",
+    "apps/api",
+    "apps/voice-worker",
+    "apps/worker",
+]
+
+[tool.uv.sources]
+uaagro-domain = { workspace = true }
+uaagro-db = { workspace = true }
+uaagro-evals = { workspace = true }
+uaagro-api = { workspace = true }
+uaagro-voice-worker = { workspace = true }
+uaagro-worker = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "hypothesis>=6.123",
+    "httpx>=0.28",
+    "asgi-lifespan>=2.1",
+    "types-pyyaml>=6.0",
+    "freezegun>=1.5",
+    # Embedded Postgres + pgvector as a pip wheel, so the RLS, seed and
+    # authz-matrix tests run on a machine with no Docker and no root. Test-only:
+    # production is Postgres 16 on RDS, and the compose stack is unchanged.
+    "pgserver>=0.1.4",
+]
+
+# ---------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = [
+    "packages/domain/src",
+    "packages/db/src",
+    "packages/evals/src",
+    "apps/api/src",
+    "apps/voice-worker/src",
+    "apps/worker/src",
+]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle / pyflakes
+    "I",             # isort
+    "UP",            # pyupgrade
+    "B",             # bugbear
+    "ASYNC",         # async correctness -- §7.6 "never block the audio loop"
+    "S",             # bandit security rules
+    "T20",           # flake8-print -- §22 "no print, structured logging only"
+    "RUF",
+]
+ignore = [
+    "S101",  # assert: allowed, pytest is built on it
+    "B008",  # function call in default arg: FastAPI Depends() idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may hardcode credentials for fixtures and bind to test hosts.
+"**/tests/**" = ["S105", "S106", "S104", "S311"]
+"packages/db/src/uaagro_db/seeds/**" = ["S311"]  # seeds use a deterministic, non-crypto RNG
+# Operator scripts talk to a person at a terminal, so stdout *is* the interface
+# -- structlog would be the wrong shape. They also shell out to our own CLIs
+# with fixed argument lists, and hold a laptop-only database password.
+"scripts/**" = ["T201", "S105", "S603", "S608"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["uaagro_db", "uaagro_domain", "uaagro_evals", "api", "voice_worker", "worker"]
+
+# ---------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+disallow_any_generics = true
+no_implicit_reexport = true
+plugins = ["pydantic.mypy"]
+mypy_path = [
+    "packages/domain/src",
+    "packages/db/src",
+    "packages/evals/src",
+    "apps/api/src",
+    "apps/voice-worker/src",
+    "apps/worker/src",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "opentelemetry.*",
+    "pipecat.*",
+    "arq.*",
+    "minio.*",
+    "onnxruntime.*",
+    "tokenizers.*",
+    "boto3.*",
+    "botocore.*",
+    "pgvector.*",
+]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "-q --strict-markers -m 'not load'"
+markers = [
+    "integration: requires the docker-compose stack (postgres/redis/minio)",
+    "vendor: makes a real call to an external vendor API; needs credentials",
+    "latency: latency regression gate (§7)",
+    "slow: takes more than a few seconds",
+    "load: sustained concurrent-call load (§19, §21 Phase 8); minutes, not seconds",
+]

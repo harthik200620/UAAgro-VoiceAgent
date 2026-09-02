@@ -1,0 +1,52 @@
+[project]
+name = "uaagro-voice-worker"
+version = "0.1.0"
+description = "Media-path voice worker: telephony transport, speech pipeline, tools"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Observability, the industry-standard stack. `telemetry.py` was written
+    # against these from the start and has been a no-op because they were never
+    # installed and `setup()` was never called (§19).
+    "opentelemetry-sdk>=1.29",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.29",
+    "opentelemetry-exporter-prometheus>=0.50b0",
+    "prometheus-client>=0.21",
+    # The fastest maintained JSON codec. The media path decodes a frame every
+    # 20 ms per call; see docs/ARCHITECTURE.md for what that is actually worth.
+    "orjson>=3.10",
+    # Named explicitly rather than inherited from uvicorn[standard]:
+    # §7 depends on this loop and nothing was testing for it.
+    "uvloop>=0.21; sys_platform != 'win32'",
+    "uaagro-domain",
+    "uaagro-db",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "websockets>=14.1",
+    "structlog>=24.4",
+    "numpy>=2.2",
+    "structlog>=24.4",
+    "redis>=5.2",
+    "httpx>=0.28",
+    # Smart Turn v3.1 runs locally on CPU. Required for the 8 languages
+    # §5.1 routes through it -- not optional.
+    "onnxruntime>=1.20",
+    # XLM-RoBERTa sentencepiece for multilingual-e5-base (§9). Paired with
+    # onnxruntime instead of transformers+torch: the worker needs an encoder,
+    # not a gigabyte of training framework.
+    "tokenizers>=0.21",
+]
+
+[project.scripts]
+uaagro-sim = "voice_worker.simulator.cli:main"
+uaagro-kb = "voice_worker.knowledge.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voice_worker"]
+
+[tool.uv.sources]
+uaagro-domain = { workspace = true }
+uaagro-db = { workspace = true }

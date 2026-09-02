@@ -1,0 +1,351 @@
+"""ARQ task definitions and the cron schedule (§11.5, §13, §18, §20).
+
+Every background job in the system, in one place, so the answer to "what runs on
+a timer" is a file rather than an archaeology exercise.
+
+Three conventions hold across all of them:
+
+**Idempotent.** ARQ retries on failure, and a retry must not double an effect.
+The post-call pipeline looks up before creating; the partition job creates only
+what is missing; retention deletes by age, which is stable across runs.
+
+**Bounded.** Each job has a timeout, because a job that hangs holds a worker
+slot forever and the queue behind it stops. The timeouts are generous relative
+to the work and tight relative to the interval.
+
+**Quiet on success.** A job that logs on every run trains people to ignore its
+output, which means the run that failed looks the same as the ones that did not.
+These log a line when they do something and stay silent when there was nothing
+to do.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import structlog
+from arq import cron
+from arq.connections import RedisSettings
+
+from uaagro_domain.compliance import within_calling_window
+from uaagro_domain.eventloop import install_fast_event_loop
+from uaagro_domain.settings import get_defaults, get_settings
+from uaagro_domain.telemetry import INSTRUMENTS
+from uaagro_domain.timezone import now_ist
+
+log = structlog.get_logger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Jobs
+# --------------------------------------------------------------------------- #
+
+
+async def process_call(ctx: dict[str, Any], call_id: str) -> str:
+    """§11.5's post-call pipeline, enqueued when a call ends."""
+    from uaagro_db.engine import system_session
+
+    from .postcall import run
+
+    # `system_session`, not a bare sessionmaker: RLS policies read `app.role`,
+    # and an unbound session sees no rows at all -- this job would report "call
+    # not found" for every call it was handed.
+    async with system_session() as session:
+        report = await run(session, uuid.UUID(call_id))
+
+    if report.failed:
+        # Raised so ARQ retries. The stages that succeeded have already
+        # committed, and each is idempotent, so a retry re-runs only what is
+        # still missing.
+        raise RuntimeError(report.summary())
+    return report.summary()
+
+
+async def dial_campaign(ctx: dict[str, Any], campaign_id: str) -> str:
+    """Run one approved campaign (§13.1).
+
+    Enqueued by ``start_due_campaigns`` or by an operator pressing start in the
+    panel. Not retried on a compliance block: §13.1's blocking checks are
+    non-overridable, and a retry is exactly the override the spec forbids.
+    """
+    from uaagro_db.engine import system_session
+
+    from .campaign import CampaignBlocked, run_campaign
+    settings = get_settings()
+
+    async def originate(to_number: str, from_number: str) -> str:
+        from voice_worker.adapters.telephony.control import build_adapter
+
+        # The approved set is the number we just decrypted from this campaign's
+        # own contact list. The check that carries the weight is the join in
+        # `campaign._plaintext_number` -- see the note there.
+        adapter = build_adapter(settings, approved=frozenset({to_number}))
+        return await adapter.originate(
+            to=to_number,
+            from_=from_number,
+            callback_url=f"{settings.public_base_url}/ws/voice",
+        )
+
+    try:
+        report = await run_campaign(
+            system_session,
+            uuid.UUID(campaign_id),
+            originate=originate,
+            max_concurrent=settings.max_concurrent_calls,
+            calls_per_minute=settings.outbound_calls_per_minute,
+        )
+    except CampaignBlocked as blocked:
+        # Logged and swallowed rather than raised: ARQ would retry a raised
+        # exception, and retrying a compliance block is the override §13.1
+        # exists to prevent. The campaign is already marked and the panel says
+        # which checks failed.
+        log.error("campaign.refused", campaign_id=campaign_id, checks=str(blocked))
+        return f"blocked: {blocked}"
+    return report.summary()
+
+
+async def start_due_campaigns(ctx: dict[str, Any]) -> str:
+    """Enqueue campaigns whose scheduled start has arrived (§13.1).
+
+    Runs every five minutes around the clock and checks the window here, in
+    IST. §18's window is a legal one and the process timezone is a deployment
+    detail; deriving one from the other is how a container that moved to UTC
+    starts dialling at half past two in the morning.
+
+    The dialer re-checks per contact anyway, so a campaign enqueued at 20:58
+    stops itself at 21:00 rather than needing this to be clever about it.
+    """
+    from uaagro_db.engine import system_session
+
+    from .campaign import campaign_ids_ready
+
+    if not within_calling_window(now_ist()):
+        return ""
+
+    async with system_session() as session:
+        due = await campaign_ids_ready(session)
+    if not due:
+        return ""
+
+    redis = ctx.get("redis")
+    if redis is None:  # pragma: no cover -- ARQ always provides one
+        return f"{len(due)} due, no queue available"
+    for campaign_id in due:
+        await redis.enqueue_job("dial_campaign", str(campaign_id))
+    log.info("campaign.enqueued", count=len(due))
+    return f"enqueued {len(due)}"
+
+
+async def roll_partitions(ctx: dict[str, Any]) -> str:
+    """Create next month's call partitions (§10).
+
+    An insert with no matching partition **fails**, and that failure lands in
+    the audio path -- so this runs daily rather than monthly. Twenty-nine
+    redundant runs a month is the price of never discovering the gap at
+    midnight on the first.
+    """
+    from datetime import date
+
+    from uaagro_db.engine import get_migrator_engine
+    from uaagro_db.partitions import ensure_partitions
+
+    # A raw connection, not a session: partition DDL is not ORM work and
+    # running it through a session would put schema changes in the same
+    # transaction as whatever else that session was doing.
+    async with get_migrator_engine().begin() as connection:
+        created = await ensure_partitions(connection, anchor=date.today())
+
+    if created:
+        log.info("partitions.created", tables=created)
+        return f"created {len(created)}"
+    return ""
+
+
+async def scrub_dnd(ctx: dict[str, Any]) -> str:
+    """Refresh the DND register before campaigns run (§13.1, §18).
+
+    §18: scrubbed before *every* campaign, and a prior customer relationship
+    does not exempt a registered number. This keeps the local copy fresh; the
+    gate still checks it per contact at dial time, because a scrub that ran
+    this morning does not know about a registration from this afternoon.
+    """
+    log.info("dnd.scrub_requested")
+    # The NCPR feed is a licensed integration that needs credentials this build
+    # does not have. Deliberately not stubbed with fake data: a scrub that
+    # silently "succeeds" against nothing is worse than one that says it did
+    # not run, because the campaign gate would then trust a fresh timestamp.
+    return "not configured"
+
+
+async def expire_retention(ctx: dict[str, Any]) -> str:
+    """Delete data past its §18 retention window.
+
+    Recordings expire through the bucket lifecycle rule; this covers the
+    database side -- transcripts and turn text -- which no lifecycle rule can
+    reach.
+    """
+    from sqlalchemy import delete, select
+
+    from uaagro_db.engine import system_session
+    from uaagro_db.models import Call, CallTurn
+
+    compliance = get_defaults().compliance
+    cutoff = datetime.now(UTC) - timedelta(days=compliance.retention_days_transcripts)
+
+    # RLS is FORCEd, so the owner role is subject to the policies too: running
+    # this as the migrator would delete nothing and report success.
+    async with system_session() as session:
+        stale = select(Call.id).where(Call.started_at < cutoff)
+        result = await session.execute(
+            delete(CallTurn).where(CallTurn.call_id.in_(stale))
+        )
+        removed = int(getattr(result, "rowcount", 0) or 0)
+    if removed:
+        log.info("retention.transcripts_deleted", turns=removed, cutoff=cutoff.date().isoformat())
+        return f"deleted {removed} turns"
+    return ""
+
+
+async def verify_audit_chain(ctx: dict[str, Any]) -> str:
+    """§17: the hash chain is tamper-evident, so something has to check it.
+
+    A chain nobody verifies is a chain that proves nothing. This runs hourly and
+    raises on a break, which is what fires the ``AuditChainBroken`` page.
+    """
+    from uaagro_db.audit import verify_chain
+    from uaagro_db.engine import get_migrator_sessionmaker
+
+    async with get_migrator_sessionmaker()() as session:
+        result = await verify_chain(session)
+
+    if not result.ok:
+        # Raised, not logged. §17 makes this a security incident until shown
+        # otherwise, and a log line at 3am is not an incident response.
+        raise RuntimeError(
+            f"audit chain diverges at sequence {result.broken_at}: {result.reason}"
+        )
+    return ""
+
+
+async def refresh_embeddings(ctx: dict[str, Any]) -> str:
+    """Re-embed knowledge chunks that have no vector (§9).
+
+    Picks up documents ingested while the embedding model was unavailable --
+    which is a real state: `uaagro-kb ingest` completes BM25-only rather than
+    failing, and those chunks sit un-embedded until something notices.
+    """
+    from sqlalchemy import func, select
+
+    from uaagro_db.engine import get_migrator_sessionmaker
+    from uaagro_db.models import KbChunk
+
+    async with get_migrator_sessionmaker()() as session:
+        pending = int(
+            await session.scalar(
+                select(func.count()).select_from(KbChunk).where(KbChunk.embedding.is_(None))
+            )
+            or 0
+        )
+
+    if not pending:
+        return ""
+    # Reported rather than done here: embedding is CPU-heavy and belongs on the
+    # ingest path where it can use the machine, not on a cron worker sharing a
+    # box with the dialer.
+    log.warning("knowledge.chunks_without_vectors", pending=pending)
+    return f"{pending} chunks need embedding; run `uaagro-kb ingest`"
+
+
+# --------------------------------------------------------------------------- #
+# Worker settings
+# --------------------------------------------------------------------------- #
+
+
+class WorkerSettings:
+    """ARQ's entry point: ``arq worker.tasks.WorkerSettings``.
+
+    ARQ has no equivalent of uvicorn's uvloop auto-detection, so without the
+    call below this process -- the dialer included -- runs on the selector
+    loop while the two web services run on uvloop.
+    """
+
+    # Runs at import, which is before ARQ creates its loop.
+    _loop = install_fast_event_loop()
+
+    functions = [  # noqa: RUF012 -- ARQ reads this attribute by name
+        process_call,
+        dial_campaign,
+        start_due_campaigns,
+        roll_partitions,
+        scrub_dnd,
+        expire_retention,
+        verify_audit_chain,
+        refresh_embeddings,
+    ]
+
+    cron_jobs = [  # noqa: RUF012
+        # Daily, not monthly. See roll_partitions.
+        cron(roll_partitions, hour=2, minute=0),
+        # Before the calling window opens, so a campaign starting at 09:00 has
+        # a scrub from this morning rather than yesterday.
+        cron(scrub_dnd, hour=7, minute=0),
+        # Overnight: it is a bulk delete and competes with nothing at 03:00.
+        cron(expire_retention, hour=3, minute=0),
+        # Hourly. A tampered chain discovered a day later is a day of history
+        # nobody can vouch for.
+        cron(verify_audit_chain, minute=5),
+        cron(refresh_embeddings, hour=4, minute=0),
+        # Every five minutes through the calling window. A campaign
+        # scheduled for 10:00 should start at 10:00, not at the top of the
+        # next hour, and the dialer's own window check bounds the tail.
+        # Every five minutes, around the clock. The window check lives in
+        # the job rather than in this schedule because ARQ's cron fires on the
+        # *process* timezone: a worker running in UTC with hour=9..21 would
+        # dial from 14:30 IST to 02:30 IST, which is both late for the
+        # campaign and outside the legal window at the far end.
+        cron(start_due_campaigns, minute=set(range(0, 60, 5))),
+    ]
+
+    #: Generous against the work, tight against the interval. A job that hangs
+    #: holds a worker slot forever and the queue behind it stops.
+    job_timeout = 300
+    max_tries = 3
+    #: §11.5 wants the post-call pipeline done inside 30 s of the call ending,
+    #: so the queue needs headroom for a burst at the end of a busy hour.
+    max_jobs = 20
+
+    @staticmethod
+    def redis_settings() -> RedisSettings:
+        return RedisSettings.from_dsn(get_settings().redis_url)
+
+    @staticmethod
+    async def on_startup(_ctx: dict[str, object]) -> None:
+        """§19 for the background worker too.
+
+        The dialer's throughput and the post-call pipeline's timing are both
+        §19 metrics, and neither was being exported from this process because
+        nothing here ever called `setup()`.
+        """
+        settings = get_settings()
+        INSTRUMENTS.setup(
+            service_name="uaagro-worker",
+            endpoint=settings.otel_exporter_otlp_endpoint or None,
+            # Nothing scrapes this process -- it serves no HTTP. Traces and the
+            # OTLP push are how its work becomes visible.
+            prometheus=False,
+        )
+
+
+__all__ = (
+    "WorkerSettings",
+    "dial_campaign",
+    "expire_retention",
+    "process_call",
+    "refresh_embeddings",
+    "roll_partitions",
+    "scrub_dnd",
+    "start_due_campaigns",
+    "verify_audit_chain",
+)

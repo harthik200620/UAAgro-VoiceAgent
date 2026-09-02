@@ -1,0 +1,40 @@
+# Local scrape configuration (§19).
+#
+# Fifteen seconds, not the Prometheus default of one minute. §7 budgets a turn
+# in milliseconds and the alerts in `alerts.yml` fire on p95 breaches; a
+# minute-resolution series cannot show a latency spike that lasted through
+# forty calls, which is exactly the spike worth seeing.
+#
+# Production scrapes the same endpoints from a managed Prometheus, so the job
+# names here match the ones the Grafana dashboards query -- a dashboard that
+# works locally and shows "No data" in production because the job was called
+# something else is a dashboard nobody trusts again.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: voice-worker
+    # The media path. This is the series the §7 latency alerts read.
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["voice-worker:8080"]
+        labels:
+          service: voice-worker
+
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          service: api
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

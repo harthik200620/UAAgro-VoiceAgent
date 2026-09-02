@@ -1,0 +1,393 @@
+# =============================================================================
+# UA Agro voice platform -- non-secret defaults.
+# §22: zero magic numbers in the pipeline. Every threshold, timeout and budget
+# is named here (or on an agent_configs row, which overrides these per flow).
+# Secrets live only in the environment; nothing in this file is sensitive.
+# =============================================================================
+
+identity:
+  org_name: "UA Agro Solutions Private Limited"
+  brand_name: "Naveen Khushhali Kisan Sewa Kendra"
+  helpline_tollfree: "1800 212 7074"
+  missed_call_number: "+91 7232020335"
+  support_email: "contact@uaagro.in"
+  default_timezone: "Asia/Kolkata"
+  currency: "INR"
+
+# -----------------------------------------------------------------------------
+# §5.1 Language routing. Declarative on purpose -- adding a language is an edit
+# here, never an `if` in the pipeline.
+#
+# Soniox recognises every language this helpline serves and decides the turn
+# itself, so the split this table used to carry is gone. Deepgram Flux fused
+# recognition and end-of-turn but covered ten languages, which forced Marathi,
+# Malayalam and the rest onto Sarvam behind a *local* turn detector -- a second
+# model, a second failure mode, and a measurably worse turn feel. One engine
+# now, one code path. Both older adapters stay wired and tested as fallbacks.
+#
+# Odia stays on Sarvam because Soniox's coverage of it is not confirmed, and
+# routing a language to an engine on an assumption is how a helpline finds out
+# in production that it cannot hear a caller.
+#
+# The `quality_tier` letters are deliberately NOT raised to match the new
+# engines. A tier is a *measured* claim (§5.1) and nothing has been measured
+# against Soniox or Bakbak yet; §19.2's per-language turn-detection eval is what
+# moves them. The notes say which engine serves the language and that the letter
+# is pending, which is the honest version of both.
+#
+# `tts.language` is BCP-47 throughout, including for Bakbak, whose own codes are
+# `hi` and `en-in`. The adapter maps them (§4.1): a vendor's spelling here would
+# leak into the audio cache key and into the admin panel.
+#
+# `voice: null` is not an oversight. Bakbak voice ids are account-scoped UUIDs,
+# so they come from BAKBAK_VOICE_* per deployment, and §5.3 requires the choice
+# come from a bake-off over a real phone line rather than from a docs example.
+# -----------------------------------------------------------------------------
+language_routes:
+  hi-IN:
+    label_en: "Hindi"
+    label_native: "हिन्दी"
+    stt: { provider: soniox, model: "stt-rt-v5", language_hints: [hi, en] }
+    turn: { strategy: soniox_endpoint }
+    tts: { provider: bakbak, model: standard, language: hi-IN, voice: null }
+    quality_tier: A
+    tier_note_en: "Full: vendor-fused semantic end-of-turn, native TTS."
+  bho:
+    label_en: "Bhojpuri"
+    label_native: "भोजपुरी"
+    aliases: [awa]              # Awadhi rides the same route
+    routes_to: hi-IN            # §5.1: do not attempt a separate model
+    quality_tier: B
+    tier_note_en: "Good: served by the Hindi path."
+  en-IN:
+    label_en: "English (India)"
+    label_native: "English"
+    stt: { provider: soniox, model: "stt-rt-v5", language_hints: [en, hi] }
+    turn: { strategy: soniox_endpoint }
+    tts: { provider: bakbak, model: standard, language: en-IN, voice: null }
+    quality_tier: A
+    tier_note_en: "Full: vendor-fused semantic end-of-turn, native TTS."
+  mr-IN:
+    label_en: "Marathi"
+    label_native: "मराठी"
+    stt: { provider: soniox, model: "stt-rt-v5", language_hints: [mr] }
+    turn: { strategy: soniox_endpoint }
+    tts: { provider: bakbak, model: standard, language: mr-IN, voice: null }
+    quality_tier: B
+    tier_note_en: "Vendor-fused end-of-turn and a native voice; tier pending the §19.2 measurement."
+  ml-IN:
+    label_en: "Malayalam"
+    label_native: "മലയാളം"
+    stt: { provider: soniox, model: "stt-rt-v5", language_hints: [ml] }
+    turn: { strategy: soniox_endpoint }
+    tts: { provider: bakbak, model: standard, language: ml-IN, voice: null }
+    quality_tier: C
+    tier_note_en: "Semantic end-of-turn now available where there was none; tier pending the §19.2 measurement."
+  bn-IN:
+    label_en: "Bengali"
+    label_native: "বাংলা"
+    stt: { provider: soniox, model: "stt-rt-v5", language_hints: [bn] }
+    turn: { strategy: soniox_endpoint }
+    tts: { provider: bakbak, model: standard, language: bn-IN, voice: null }
+    quality_tier: B
+    tier_note_en: "Vendor-fused end-of-turn and a native voice; tier pending the §19.2 measurement."
+  ta-IN:
+    label_en: "Tamil"
+    label_native: "தமிழ்"
+    stt: { provider: soniox, model: "stt-rt-v5", language_hints: [ta] }
+    turn: { strategy: soniox_endpoint }
+    tts: { provider: bakbak, model: standard, language: ta-IN, voice: null }
+    quality_tier: B
+    tier_note_en: "Vendor-fused end-of-turn and a native voice; tier pending the §19.2 measurement."
+  te-IN:
+    label_en: "Telugu"
+    label_native: "తెలుగు"
+    stt: { provider: soniox, model: "stt-rt-v5", language_hints: [te] }
+    turn: { strategy: soniox_endpoint }
+    tts: { provider: bakbak, model: standard, language: te-IN, voice: null }
+    quality_tier: B
+    tier_note_en: "Vendor-fused end-of-turn and a native voice; tier pending the §19.2 measurement."
+  kn-IN:
+    label_en: "Kannada"
+    label_native: "ಕನ್ನಡ"
+    stt: { provider: soniox, model: "stt-rt-v5", language_hints: [kn] }
+    turn: { strategy: soniox_endpoint }
+    tts: { provider: bakbak, model: standard, language: kn-IN, voice: null }
+    quality_tier: B
+    tier_note_en: "Vendor-fused end-of-turn and a native voice; tier pending the §19.2 measurement."
+  gu-IN:
+    label_en: "Gujarati"
+    label_native: "ગુજરાતી"
+    stt: { provider: soniox, model: "stt-rt-v5", language_hints: [gu] }
+    turn: { strategy: soniox_endpoint }
+    tts: { provider: bakbak, model: standard, language: gu-IN, voice: null }
+    quality_tier: B
+    tier_note_en: "Vendor-fused end-of-turn and a native voice; tier pending the §19.2 measurement."
+  pa-IN:
+    label_en: "Punjabi"
+    label_native: "ਪੰਜਾਬੀ"
+    stt: { provider: soniox, model: "stt-rt-v5", language_hints: [pa] }
+    turn: { strategy: soniox_endpoint }
+    tts: { provider: sarvam, model: "bulbul:v3", language: pa-IN }
+    quality_tier: B
+    tier_note_en: "Vendor-fused end-of-turn; Bakbak has no Punjabi voice, so Sarvam speaks it. Tier pending the §19.2 measurement."
+  or-IN:
+    label_en: "Odia"
+    label_native: "ଓଡ଼ିଆ"
+    stt: { provider: sarvam, model: "saaras:v3-realtime", language_hints: [or] }
+    turn: { strategy: vad_silence }
+    tts: { provider: sarvam, model: "bulbul:v3", language: or-IN }
+    quality_tier: C
+    tier_note_en: "Acceptable: Soniox coverage unconfirmed, so Sarvam with VAD endpointing only."
+
+default_language: hi-IN
+
+# -----------------------------------------------------------------------------
+# §5.2 Turn detection
+# -----------------------------------------------------------------------------
+turn_detection:
+  # Soniox publishes the commit, not a probability, so §5.2's two Flux
+  # thresholds become three dials plus one of ours. Set for a helpline, not a
+  # dictation app: ending a turn 300 ms sooner is worth more here than the last
+  # few percent of transcript revision, because the farmer is waiting on a
+  # reply and the §16.3 validator catches a misheard product name anyway.
+  soniox:
+    # 0-3. The vendor's own latency knob: it shortens the wait using the
+    # semantics of what was said, not just how long the silence has run. At 3
+    # the model has less time to revise words it has already emitted, which is
+    # the accuracy this buys back time with -- acceptable here because §5.5
+    # biases the decode toward the catalogue and §16.3 refuses an answer built
+    # on a number no tool produced. §19.2 measures whether that holds.
+    latency_adjustment_level: 3
+    sensitivity: 0.2              # -1.0..1.0; slightly biased toward ending the turn
+    # Deliberately NOT lowered alongside the level above. This is the pure
+    # timeout backstop for when the semantic model does not fire, and §5.2 is
+    # emphatic that cutting off a farmer who paused to think is the worst
+    # failure this system has. Latency is bought from the semantic knob, not
+    # from the caller's thinking time.
+    max_endpoint_delay_ms: 1200   # 500..3000 vendor range
+    # §5.2's eager end-of-turn has no vendor equivalent here, so this is the
+    # substitute: how long every-token-final may persist before the pipeline
+    # starts generating speculatively. Short, because a false eager costs only
+    # tokens -- TURN_RESUMED cancels it and it never reaches the caller.
+    eager_after_final_ms: 120
+  flux:
+    eager_eot_threshold: 0.45     # begin speculative LLM generation
+    eot_threshold: 0.75           # commit the turn
+    eot_timeout_ms: 6000          # backstop for hesitant speakers
+    eot_timeout_ms_slow_speaker: 8000
+  smart_turn_v3:
+    # Use the v3.1 ONNX weights (released 2025-12-03): a drop-in replacement
+    # for v3.0, same 23 languages including Hindi and Marathi, materially
+    # better accuracy (English 88.3% -> 94.7% on the 8 MB variant).
+    # Verified 2026-08-31.
+    model_version: "v3.1"
+    min_delay_s: 0.30
+    max_delay_s: 2.50
+  vad_silence:
+    stop_secs: 0.85               # deliberately generous
+    # A trailing conjunction or postposition suppresses endpointing this much
+    # longer -- rural callers pause mid-sentence far more than the model expects.
+    trailing_particle_grace_ms: 400
+  # Two observed long pauses flag the caller and persist on the farmer record.
+  slow_speaker_pause_threshold_ms: 2500
+  slow_speaker_observations_required: 2
+
+# -----------------------------------------------------------------------------
+# §5.3 / §5.4 Speech output
+# -----------------------------------------------------------------------------
+tts:
+  pace: 0.97                      # §5.3: slightly slower than default, never faster
+  max_answer_words: 35            # §8: every extra word is billed twice
+  max_dosage_answer_words: 60
+  sentence_chunking: true         # chunk on sentence boundaries so barge-in cuts cleanly
+  cache:
+    enabled: true
+    # Phrases pre-synthesised at boot and served from Redis as raw 8 kHz bytes.
+    preload: [greeting, hold, closing, transfer_notice, disclosure, safety_emergency, reprompt]
+    top_sentence_cache_size: 40
+
+barge_in:
+  enabled: true
+  # §5.4: cancelling generation without clearing the provider buffer leaves the
+  # agent talking for another second. Both must happen.
+  send_provider_clear: true
+  cancel_deadline_ms: 200
+  # Disclosure is legally mandated, so it alone resists interruption (§13.2).
+  suppress_during_disclosure_ms: 600
+
+# -----------------------------------------------------------------------------
+# §7 Latency budget. CI fails the build on a p95 breach of the no-tool path.
+# -----------------------------------------------------------------------------
+# NOTE, measured 2026-09-02: `llm_ttft` below is currently breached. The
+# configured endpoint delivers a first token in ~1,251 ms warm against a 550 ms
+# p95 target, which also puts `total_no_tool` out of reach. These numbers stay
+# as written because they are what the design requires, and CI is meant to keep
+# failing on them until the path is fast enough -- moving a target to meet a
+# measurement is how a latency budget becomes decoration.
+latency_budget_ms:
+  network_in:      { p50: 25,  p95: 60 }
+  turn_commit:     { p50: 120, p95: 250 }
+  stt_final:       { p50: 90,  p95: 200 }
+  tool_execution:  { p50: 110, p95: 400 }
+  llm_ttft:        { p50: 260, p95: 550 }
+  tts_ttfb:        { p50: 180, p95: 350 }
+  network_out:     { p50: 25,  p95: 60 }
+  total_no_tool:   { p50: 700, p95: 1200 }
+  total_with_tool: { p50: 810, p95: 1500 }
+
+# -----------------------------------------------------------------------------
+# §6 LLM
+# -----------------------------------------------------------------------------
+llm:
+  temperature: 0.3
+  max_output_tokens: 220
+  target_input_tokens_per_turn: 2000
+  # -------------------------------------------------------------------------
+  # These two are OPERATIONAL timeouts -- "this attempt is broken, move to the
+  # fallback model" -- and they are NOT §7's latency budget. The budget lives
+  # in `latency_budget_ms.llm_ttft` below, still says 260/550, and is still
+  # breached by the configured endpoint. That breach is reported, not hidden.
+  #
+  # They were the same number, and the coincidence was doing real damage.
+  # Measured through the configured endpoint on 2026-09-02: first token 1,251 ms
+  # warm (median of 4), 1,519 ms cold, 1,914 ms worst. Against an 800 ms
+  # timeout that means *every* turn abandons a generation that was going to
+  # succeed, retries on the fallback model -- which is slower still and timed
+  # out on two of three attempts -- and then escalates to a human. A helpline
+  # where every call reaches a person is not a degraded helpline, it is a
+  # broken one, and nothing about it would have looked like a timeout setting.
+  #
+  # Set from the measurement with headroom, not from the aspiration. Lower
+  # these when the path gets faster, not to make a dashboard look better.
+  # Re-measured through the real per-call path: 1,362 / 1,735 / 2,383 ms
+  # (min / median / max of four). The proxy is variable, and 2,500 left one
+  # turn in four within 120 ms of the cutoff -- a cutoff that does not degrade
+  # gracefully, because crossing it abandons a working generation for a
+  # fallback model that is slower still. Sized against the worst observed
+  # turn, not the median. The caller is not left in silence meanwhile: §11.4's
+  # hold phrase covers from 750 ms.
+  first_token_timeout_ms: 3500
+  total_timeout_ms: 8000
+  max_tool_calls_per_turn: 2
+  history_verbatim_turns: 8
+  history_summary_refresh_every: 6
+  prompt_caching: true
+
+tools:
+  p95_budget_ms: 150
+  hard_timeout_ms: 400
+  retries: 1
+
+# -----------------------------------------------------------------------------
+# §9 Knowledge layer
+# -----------------------------------------------------------------------------
+knowledge:
+  chunk_tokens_min: 300
+  chunk_tokens_max: 500
+  chunk_overlap_ratio: 0.15
+  rrf_k: 60
+  rerank_candidates: 20
+  rerank_keep: 4
+  # Prices and stock are never cached; they go to Tier 1 on every turn.
+  answer_cache_default_ttl_s: 86400
+  answer_cache_forbidden_fields: [price, stock, discount_price, qty_on_hand]
+
+# -----------------------------------------------------------------------------
+# §11.4 In-call failure handling
+# -----------------------------------------------------------------------------
+call_handling:
+  silence_first_prompt_s: 6
+  silence_second_prompt_s: 15
+  silence_abandon_s: 25
+  hold_patience_s: 25             # caller asks to wait -- hold silently this long
+  low_asr_confidence: 0.55
+  low_asr_consecutive_turns_to_escalate: 3
+  same_intent_failures_to_escalate: 2
+
+# -----------------------------------------------------------------------------
+# §12 Escalation and transfer
+# -----------------------------------------------------------------------------
+escalation:
+  transfer_ring_timeout_s: 20
+  whisper_max_s: 6                # §12.3: whisper context, never a blind transfer
+  max_transfers_per_caller_per_day: 3
+  sentiment_decline_turns: 3
+  sentiment_escalate_below: -0.4
+  high_value_order_ceiling_inr: 25000
+  reasons:                        # free-text reasons are rejected (§12.3)
+    - safety_emergency
+    - explicit_request
+    - abuse_or_anger
+    - legal_or_dispute
+    - repeated_misunderstanding
+    - low_recognition_confidence
+    - negative_sentiment
+    - complex_or_high_value_order
+    - dealership_enquiry
+    - product_complaint
+    - restricted_product
+    - missing_data
+    - scheme_eligibility
+    - caller_disputes_answer
+
+# -----------------------------------------------------------------------------
+# §11.1 Spam screening. Defaults are deliberately loose -- a false positive on a
+# farmer helpline is far more expensive than a spam call that gets answered.
+# -----------------------------------------------------------------------------
+spam_screening:
+  enabled: true
+  max_calls_per_hour: 6
+  max_calls_per_day: 20
+  repeat_abandon_threshold: 4
+  rejection_message_key: spam_rejection
+  rejection_max_duration_s: 6
+
+# -----------------------------------------------------------------------------
+# §18 Compliance -- platform-enforced, not operator-overridable
+# -----------------------------------------------------------------------------
+compliance:
+  calling_window_start: "09:00"
+  calling_window_end: "21:00"
+  max_attempts_per_contact: 3
+  min_hours_between_attempts: 24
+  retry_gap_hours_busy: 4
+  rolling_contact_cap_per_farmer_per_week: 2
+  promotional_cli_series: "140"
+  consent_validity_days: 90       # TCCCPR: consent expires and must be re-acquired
+  dnd_scrub_max_age_hours: 24
+  complaint_threshold_auto_pause: 5
+  retention_days_recordings: 180
+  retention_days_transcripts: 730
+
+# -----------------------------------------------------------------------------
+# §8 Cost model. Live rates come from the vendor_rates table; these seed it and
+# are re-verified by a daily job. Vendor rates verified 2026-08-31 -- see
+# docs/COST_MODEL.md for sources and for the one change inside the horizon.
+# -----------------------------------------------------------------------------
+cost:
+  usd_inr_rate: 88.0
+  max_cost_per_call_inr: 25
+  daily_spend_cap_inr: 5000
+  seed_rates:
+    - { vendor: sarvam,   service: stt,        unit: minute,     rate: 0.50,   currency: INR }
+    - { vendor: sarvam,   service: tts,        unit: kilochar,   rate: 3.00,   currency: INR }
+    - { vendor: deepgram, service: stt,        unit: minute,     rate: 0.0078, currency: USD }
+    # Soniox realtime STT is published at $0.12/hr (verified 2026-09-02).
+    - { vendor: soniox,   service: stt,        unit: minute,     rate: 0.002,  currency: USD }
+    # Bakbak does not publish a per-character or per-minute TTS rate; Raya
+    # prices the bundled agent platform, which is a different product. Seeded
+    # at zero *and* flagged, because §8's per-call cost is only honest if every
+    # line is either measured or visibly missing -- see docs/COST_MODEL.md.
+    - { vendor: bakbak,   service: tts,        unit: kilochar,   rate: 0.0,    currency: INR }
+    - { vendor: exotel,   service: did_inbound,      unit: minute, rate: 0.60, currency: INR }
+    - { vendor: exotel,   service: tollfree_inbound, unit: minute, rate: 1.80, currency: INR }
+    - { vendor: exotel,   service: outbound,         unit: minute, rate: 0.70, currency: INR }
+    - { vendor: meta,     service: wa_marketing, unit: message,  rate: 0.8631, currency: INR }
+    - { vendor: meta,     service: wa_utility,   unit: message,  rate: 0.115,  currency: INR }
+    # Free-form service replies inside the 24-hour window are free only until
+    # 2026-09-30. From 2026-10-01 they price as utility, with no volume
+    # discount, and in-window utility templates also become chargeable.
+    # Update this row once Meta publishes final rates (expected 2026-09-01).
+    - { vendor: meta,     service: wa_service,   unit: message,  rate: 0.0,    currency: INR }
+    - { vendor: internal, service: compute,      unit: call,     rate: 0.30,   currency: INR }

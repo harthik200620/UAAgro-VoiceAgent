@@ -1,0 +1,122 @@
+{
+  "title": "UA Agro - Compliance",
+  "uid": "uaagro-compliance",
+  "tags": ["uaagro", "compliance"],
+  "timezone": "Asia/Kolkata",
+  "refresh": "1m",
+  "time": { "from": "now-7d", "to": "now" },
+  "description": "Section 15.1's compliance dashboard. Everything here is a legal boundary rather than a quality metric, so the panels are counts of violations, where the correct value is always zero, rather than rates where a small number looks acceptable.",
+  "panels": [
+    {
+      "title": "Calls outside the 09:00-21:00 IST window",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 0 },
+      "description": "Section 18. The dialer enforces this at dial time; any non-zero value means that check was bypassed, and each occurrence is a violation per call.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(uaagro_campaign_calls_total{outside_window=\"true\"}[7d])"
+        }
+      ]
+    },
+    {
+      "title": "Promotional calls from a non-140 CLI",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 0 },
+      "description": "Section 13.1. These connect perfectly and violate TCCCPR on every call, so nothing else in the system would notice.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(uaagro_campaign_calls_total{cli_series=\"invalid\"}[7d])"
+        }
+      ]
+    },
+    {
+      "title": "Audit chain verification",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 0 },
+      "description": "Section 17: tamper-evident. 1 is intact; 0 is either corruption or someone editing history.",
+      "targets": [{ "expr": "uaagro_audit_chain_valid" }]
+    },
+    {
+      "title": "Compliance gate: contacts removed by check",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "description": "Section 13.1's per-check breakdown, over time. A consent bar growing week on week is a consent-collection problem, and this is where it becomes visible before a campaign is blocked entirely.",
+      "targets": [
+        {
+          "expr": "sum by (check) (increase(uaagro_gate_removed_total[7d]))",
+          "legendFormat": "{{check}}"
+        }
+      ]
+    },
+    {
+      "title": "Opt-outs honoured",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "description": "Section 13.2 writes internal_dnc synchronously during the call. The two series should be identical; a gap means a write failed and somebody who asked to be removed is still on the list.",
+      "targets": [
+        {
+          "expr": "sum(increase(uaagro_opt_out_requested_total[1d]))",
+          "legendFormat": "requested"
+        },
+        {
+          "expr": "sum(increase(uaagro_opt_out_written_total[1d]))",
+          "legendFormat": "written"
+        }
+      ]
+    },
+    {
+      "title": "Unapproved advisory rows",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 13 },
+      "description": "Section 9. Not zero means the agent is currently refusing dosage questions and escalating, which is correct behaviour and an unusable service.",
+      "targets": [{ "expr": "uaagro_advisory_unapproved" }]
+    },
+    {
+      "title": "Recordings past their retention date",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 13 },
+      "description": "Section 18. The lifecycle rule should keep this at zero; a non-zero value means the rule is not running.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [{ "expr": "uaagro_recordings_past_retention" }]
+    },
+    {
+      "title": "Consent expiring within 14 days",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 13 },
+      "description": "Section 18 makes consent non-permanent. This is the number that tells an operator to re-collect before a campaign silently loses half its audience.",
+      "targets": [{ "expr": "uaagro_consent_expiring_14d" }]
+    }
+  ]
+}

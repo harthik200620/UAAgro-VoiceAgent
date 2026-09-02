@@ -1,0 +1,294 @@
+# Local development stack (§20).
+#
+# Every service §20 lists: Postgres with pgvector, Redis, MinIO, LiteLLM, the
+# API, the background worker, the voice worker, the admin panel, the telephony
+# simulator, Prometheus and Grafana.
+#
+# The simulator sits behind a profile rather than starting with the stack. It
+# dials the worker, and a container that placed a call every time the stack
+# came up would fill the call table with noise that looks like traffic:
+#
+#     docker compose run --rm simulator --wav fixtures/hindi.wav
+
+name: uaagro
+
+services:
+  postgres:
+    # Postgres 16 with pgvector preinstalled.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: uaagro
+      POSTGRES_PASSWORD: uaagro_dev_pw
+      POSTGRES_DB: uaagro
+    command:
+      - postgres
+      # The audio path runs with a 120 ms statement timeout, so anything slow
+      # enough to log here is already a §7 problem worth seeing locally.
+      - -c
+      - log_min_duration_statement=200
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=256MB
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uaagro -d uaagro"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: uaagro_dev
+      MINIO_ROOT_PASSWORD: uaagro_dev_secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot: creates the private buckets, then exits.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 uaagro_dev uaagro_dev_secret &&
+      mc mb --ignore-existing local/uaagro-recordings &&
+      mc mb --ignore-existing local/uaagro-kb &&
+      mc anonymous set none local/uaagro-recordings &&
+      mc anonymous set none local/uaagro-kb &&
+      echo 'buckets ready'
+      "
+
+  # Applies migrations and loads seeds, then exits. Everything else waits on it,
+  # so `make dev` yields a database that is ready to answer a call.
+  migrate:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.python
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://uaagro_app:uaagro_dev_pw@postgres:5432/uaagro
+      DATABASE_URL_MIGRATOR: postgresql+asyncpg://uaagro:uaagro_dev_pw@postgres:5432/uaagro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "uaagro-db migrate && uaagro-db seed"]
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.python
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://uaagro_app:uaagro_dev_pw@postgres:5432/uaagro
+      DATABASE_URL_MIGRATOR: postgresql+asyncpg://uaagro:uaagro_dev_pw@postgres:5432/uaagro
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    command:
+      ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;urllib.request.urlopen('http://localhost:8000/health/live')
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  voice-worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.python
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://uaagro_app:uaagro_dev_pw@postgres:5432/uaagro
+      REDIS_URL: redis://redis:6379/0
+      # Local development accepts the simulator without a provider token.
+      TELEPHONY_IP_ALLOWLIST: ""
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    # Drain, never kill: on SIGTERM the worker stops accepting new calls and
+    # lets in-flight ones finish (§20).
+    stop_grace_period: 60s
+    command:
+      ["uvicorn", "voice_worker.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;urllib.request.urlopen('http://localhost:8080/health/live')
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # The ARQ background worker (§11.5, §13.1). Separate from the voice worker on
+  # purpose: §4.1 keeps the media path free of anything that can block it, and
+  # a post-call summary or a campaign dial is exactly the sort of second-long
+  # work that must not share an event loop with live audio.
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.python
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://uaagro_app:uaagro_dev_pw@postgres:5432/uaagro
+      DATABASE_URL_MIGRATOR: postgresql+asyncpg://uaagro:uaagro_dev_pw@postgres:5432/uaagro
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      PUBLIC_BASE_URL: http://voice-worker:8080
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    # A job that is mid-flight when the container stops is retried by ARQ, but
+    # a post-call pipeline that is halfway through is cheaper to let finish.
+    stop_grace_period: 30s
+    command: ["arq", "worker.tasks.WorkerSettings"]
+
+  # §6.4: one gateway in front of every model, so a model change is a config
+  # change. The API and voice worker never hold a vendor key -- they hold this
+  # URL, which is also what makes the §8 cost accounting single-sourced.
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.63.0-stable
+    env_file:
+      - path: ../../.env
+        required: false
+    volumes:
+      - ../litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;urllib.request.urlopen('http://localhost:4000/health/liveliness')
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  admin:
+    build:
+      context: ../../apps/admin
+      dockerfile: ../../infra/docker/Dockerfile.admin
+    environment:
+      # Server-side only. §1 N6: the browser never holds a credential that
+      # could reach the control plane, so this is deliberately not
+      # NEXT_PUBLIC_ -- see the panel's boundary test.
+      API_BASE_URL: http://api:8000
+      NODE_ENV: production
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+  # Replays a WAV over the Exotel AgentStream protocol (§4.3). Runs on demand
+  # rather than at boot -- `docker compose run --rm simulator` -- because a
+  # container that dials the worker every time the stack comes up would fill
+  # the call table with noise.
+  simulator:
+    profiles: ["tools"]
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.python
+    environment:
+      SIMULATOR_TARGET: ws://voice-worker:8080/ws/voice
+    depends_on:
+      voice-worker:
+        condition: service_healthy
+    entrypoint: ["uaagro-sim"]
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # Local retention is short: this is for watching a call happen, not for
+      # keeping history. Production scrapes into a managed store.
+      - --storage.tsdb.retention.time=48h
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    environment:
+      # Local only. The production panel sits behind SSO and is provisioned by
+      # Terraform, not by an environment variable.
+      GF_SECURITY_ADMIN_PASSWORD: uaagro_dev_pw
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3001:3000"
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  prometheus-data:
+  grafana-data:

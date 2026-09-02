@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+}
+
+/* §15: dense and legible. A table row that a manager scans forty times an hour
+   should not need a second look to find the outcome column. */
+.grid-dense td,
+.grid-dense th {
+  @apply px-2 py-1 align-top;
+}

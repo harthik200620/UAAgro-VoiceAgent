@@ -1,0 +1,154 @@
+{
+  "title": "UA Agro - Live Operations",
+  "uid": "uaagro-live-ops",
+  "tags": ["uaagro", "voice"],
+  "timezone": "Asia/Kolkata",
+  "refresh": "10s",
+  "time": { "from": "now-3h", "to": "now" },
+  "description": "Sections 15 and 19's operations view. Ordered by what an operator looks at first during a peak-season rush: are calls being served, are they fast enough, is anything on fire.",
+  "panels": [
+    {
+      "title": "Calls in flight vs capacity",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 0 },
+      "description": "Section 3 expects a 5-10x seasonal peak. The capacity line is drawn so headroom is visible rather than inferred.",
+      "targets": [
+        { "expr": "uaagro_calls_in_flight", "legendFormat": "in flight" },
+        { "expr": "uaagro_concurrency_capacity", "legendFormat": "capacity" }
+      ]
+    },
+    {
+      "title": "Turn latency p50 / p95 vs the section 7 ceiling",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 0 },
+      "description": "The 1200 ms threshold is section 7's ceiling, drawn on the panel so a breach is visible without reading the axis.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1200 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(uaagro_turn_latency_ms_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(uaagro_turn_latency_ms_bucket[5m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "title": "Latency by segment (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 7 },
+      "description": "Section 7's budget, segment by segment. This is the panel that turns 'the agent is slow' into 'Deepgram is slow', which is the difference between a guess and a fix.",
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, segment) (rate(uaagro_segment_latency_ms_bucket[5m])))",
+          "legendFormat": "{{segment}}"
+        }
+      ]
+    },
+    {
+      "title": "ASR confidence by language",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 7 },
+      "description": "Section 19: surfaces which districts have accent or noise problems. A language whose confidence sits low is one whose quality tier is optimistic.",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, language) (rate(uaagro_asr_confidence_bucket[15m])))",
+          "legendFormat": "{{language}}"
+        }
+      ]
+    },
+    {
+      "title": "Transfers by reason",
+      "type": "barchart",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 14 },
+      "description": "Section 12's triggers. The shape of this chart is how an operator tunes thresholds against real data rather than intuition: a spike in low_recognition_confidence is a line-quality problem, not an agent problem.",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(uaagro_transfers_total[1h]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "title": "Containment vs transfer",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 14 },
+      "description": "The pair an operator judges the agent by. Shown together because either alone misleads: perfect containment with an unhappy caller base is not success.",
+      "targets": [
+        {
+          "expr": "sum(rate(uaagro_calls_total{outcome=\"resolved\"}[30m])) / sum(rate(uaagro_calls_total[30m]))",
+          "legendFormat": "contained"
+        },
+        {
+          "expr": "sum(rate(uaagro_transfers_total[30m])) / sum(rate(uaagro_calls_total[30m]))",
+          "legendFormat": "transferred"
+        }
+      ]
+    },
+    {
+      "title": "Safety triggers (section 16.1)",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 21 },
+      "description": "Not an error metric. Each one is a farmer who reported a poisoning and a P0 ticket needing human review within the hour.",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [{ "expr": "increase(uaagro_safety_triggers_total[24h])" }]
+    },
+    {
+      "title": "Cost per call",
+      "type": "timeseries",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 21 },
+      "description": "Section 8's worked example is 6.65 rupees for a 3-minute Hindi call. Upward drift is usually the answer cache having stopped working.",
+      "fieldConfig": { "defaults": { "unit": "currencyINR" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(uaagro_call_cost_rupees_bucket[1h])))",
+          "legendFormat": "median"
+        }
+      ]
+    },
+    {
+      "title": "Validator rejections",
+      "type": "timeseries",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 21 },
+      "description": "Section 16.3's last line. A rise means the layers above it, the tools and the prompt, have stopped doing their job.",
+      "targets": [
+        {
+          "expr": "sum by (rule) (rate(uaagro_validator_rejections_total[15m]))",
+          "legendFormat": "{{rule}}"
+        }
+      ]
+    },
+    {
+      "title": "Unhandled intents",
+      "type": "timeseries",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 21 },
+      "description": "Section 11.2's improvement loop. A rising count is not a fault: it is the agent meeting questions nobody anticipated, and the queue an operator works through.",
+      "targets": [
+        { "expr": "sum(increase(uaagro_intents_total{intent=\"unknown\"}[1h]))" }
+      ]
+    }
+  ]
+}

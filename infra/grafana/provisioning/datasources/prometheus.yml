@@ -1,0 +1,25 @@
+# The datasource the dashboards query, provisioned as code (§19).
+#
+# `isDefault: true` is load-bearing rather than a convenience. The dashboard
+# JSON in `infra/grafana/dashboards` carries no datasource reference at all --
+# each panel leaves it null and takes the default. That keeps the dashboards
+# portable across environments whose datasource uids differ, and it means this
+# flag is the only thing connecting them to Prometheus: drop it, and every
+# panel reads "No data", which looks like an outage rather than a
+# configuration mistake.
+#
+# The uid is fixed anyway, so a future dashboard that does pin one has a stable
+# value to pin.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: uaagro-prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s

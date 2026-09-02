@@ -1,0 +1,167 @@
+# Alert rules (§19).
+#
+# Every rule below fires on a condition somebody can act on tonight. That is the
+# filter: a rule that pages at 3am and whose only remedy is "watch it" trains
+# people to silence the channel, and a silenced channel is worse than no rule.
+#
+# The `for` clauses are as important as the thresholds. §7's ceilings are p95
+# figures over a window, so a rule without a `for` fires on one slow turn on one
+# rural GSM line -- which is a normal Tuesday, not an incident.
+
+groups:
+  - name: latency
+    interval: 30s
+    rules:
+      # §7 makes the total p95 a build-failing gate, so a sustained breach in
+      # production is a real regression rather than a slow afternoon.
+      - alert: TurnLatencyP95Breach
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(uaagro_turn_latency_ms_bucket{tool_call="false"}[5m]))
+          ) > 1200
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "Turn p95 over §7's 1200 ms ceiling"
+          description: >-
+            Sustained for 10 minutes. Check the per-segment panel first: a
+            single segment over its own ceiling narrows this to one vendor.
+          runbook: docs/RUNBOOK.md#latency
+
+      - alert: TurnLatencyWithToolP95Breach
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(uaagro_turn_latency_ms_bucket{tool_call="true"}[5m]))
+          ) > 1500
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "Tool-calling turn p95 over §7's 1500 ms ceiling"
+          runbook: docs/RUNBOOK.md#latency
+
+      - alert: LlmTimeToFirstTokenSlow
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(uaagro_llm_ttft_ms_bucket[5m]))) > 550
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "LLM TTFT p95 over 550 ms"
+          description: >-
+            The gateway falls back to the secondary model on breach, so check
+            the fallback rate: if it is high, the primary is the problem and the
+            calls are still being served.
+
+  - name: vendors
+    interval: 30s
+    rules:
+      - alert: SttVendorFailing
+        expr: rate(uaagro_tool_errors_total{component="stt"}[5m]) > 0.1
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "STT error rate above 10%"
+          runbook: docs/RUNBOOK.md#vendor-outage
+
+      - alert: LlmRunningOnFallbackModel
+        expr: |
+          sum(rate(uaagro_llm_ttft_ms_count{rung="fallback"}[15m]))
+            / sum(rate(uaagro_llm_ttft_ms_count[15m])) > 0.25
+        for: 15m
+        labels: { severity: warn }
+        annotations:
+          summary: "A quarter of turns are on the fallback model"
+          description: >-
+            Calls are being served, which is why this is a warning and not a
+            page -- but a system quietly running on its secondary model all week
+            is one nobody has noticed is degraded.
+
+      - alert: WhatsAppDeliveryFailureSpike
+        expr: |
+          sum(rate(uaagro_whatsapp_messages_total{status="failed"}[10m]))
+            / sum(rate(uaagro_whatsapp_messages_total[10m])) > 0.1
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "WhatsApp delivery failures above 10%"
+          description: >-
+            §13.2 has the agent read the offer aloud and raise a ticket when a
+            send fails, so farmers are not left uninformed -- but the ticket
+            queue is now absorbing it.
+
+  - name: capacity
+    interval: 15s
+    rules:
+      - alert: ConcurrencyCeilingApproaching
+        expr: uaagro_calls_in_flight / uaagro_concurrency_capacity > 0.85
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "Above 85% of call capacity"
+          description: >-
+            §3 expects a 5-10x seasonal peak. Scale before the ceiling, not at
+            it: a farmer who gets a busy tone during sowing does not call back.
+          runbook: docs/RUNBOOK.md#scaling
+
+  - name: compliance
+    interval: 60s
+    rules:
+      # §18 makes this a legal boundary, not a quality metric. Any occurrence.
+      - alert: CallOutsideCallingWindow
+        expr: increase(uaagro_campaign_calls_total{outside_window="true"}[5m]) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "A call was placed outside the 09:00-21:00 IST window"
+          description: >-
+            The dialer enforces this at dial time. An occurrence means that
+            check was bypassed, which is a TCCCPR violation per call.
+          runbook: docs/RUNBOOK.md#compliance-breach
+
+      - alert: AuditChainBroken
+        expr: uaagro_audit_chain_valid == 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "The audit hash chain does not verify"
+          description: >-
+            §17: the chain is tamper-evident. A break is either corruption or
+            someone editing history, and both need a person tonight.
+          runbook: docs/RUNBOOK.md#audit-chain
+
+      - alert: BudgetBreach
+        expr: uaagro_spend_today_rupees > uaagro_budget_today_rupees
+        for: 0m
+        labels: { severity: warn }
+        annotations:
+          summary: "Daily spend over budget"
+
+  - name: safety
+    interval: 30s
+    rules:
+      # Not an error condition. §16.1 firing means the system worked -- and
+      # somebody needs to know a farmer reported a poisoning, within the hour
+      # §16.1 gives for mandatory human review.
+      - alert: SafetyEmergencyTriggered
+        expr: increase(uaagro_safety_triggers_total[5m]) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "An agrochemical safety emergency was reported on a call"
+          description: >-
+            §16.1 requires human review within one hour. The call is flagged and
+            a P0 ticket exists; this is the page that makes sure someone reads
+            it.
+          runbook: docs/RUNBOOK.md#safety-emergency
+
+      - alert: ValidatorRejectionSpike
+        expr: |
+          sum(rate(uaagro_validator_rejections_total[15m]))
+            / sum(rate(uaagro_turn_latency_ms_count[15m])) > 0.05
+        for: 15m
+        labels: { severity: warn }
+        annotations:
+          summary: "The output validator is rejecting more than 5% of turns"
+          description: >-
+            §16.3's validator is a last line. A spike means the layers above it
+            -- the tools and the prompt -- have stopped doing their job, most
+            likely after a prompt or model change.

@@ -1,0 +1,48 @@
+# secrets -- §17: nothing in the repo, nothing in an image
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+
+# The no-Docker local stack: an embedded Postgres data directory, its
+# generated DSNs and the service logs. Machine-specific and holds a
+# database password, so it never goes near a commit.
+.localdev/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# node / next
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# local data -- recordings and audio caches never enter git
+data/
+recordings/
+models/
+fixtures/audio/*.wav
+!fixtures/audio/.gitkeep
+minio-data/
+postgres-data/
+
+# tooling
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/

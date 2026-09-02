@@ -1,0 +1,19 @@
+# Load the dashboards from disk (§19: "Grafana dashboards as code").
+#
+# `allowUiUpdates: false` on purpose. A dashboard edited in the browser and not
+# committed is a dashboard that disappears on the next deploy, and the person
+# who made the edit is the last to find out.
+
+apiVersion: 1
+
+providers:
+  - name: uaagro
+    orgId: 1
+    folder: UA Agro
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
