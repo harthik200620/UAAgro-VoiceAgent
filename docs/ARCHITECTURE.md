@@ -607,11 +607,22 @@ for.
 
 §15 asks for a Hindi and English panel. Both are built and complete
 (`messages/en.json`, `messages/hi.json`, the Hindi written for centre managers
-in the districts), and the panel opens in English by the customer's decision:
-`/` goes to `/en`, the sidebar switch goes to `/hi`, and the switch leaves a
-cookie so this browser opens in Hindi next time. Automatic detection is off --
-a browser whose language list happens to start with Hindi is not a choice the
-operator made. Everything the panel *displays* stays in the language it was
+in the districts), and the panel opens in English by the customer's decision.
+
+**The language is a per-browser setting, not the address.** The switch in the
+sidebar posts to `/api/locale`, which records the choice in a cookie and then
+redirects; `lib/locale-choice.ts` decides every request from that cookie, and
+the locale prefix follows it. A `/hi/...` link opened by a browser that has not
+chosen Hindi lands on the English page, and an `/en/...` link opened by one
+that has chosen Hindi lands on the Hindi page. That is the opposite of what
+this section said when the panel shipped, and the reason is a real failure: the
+default was already English and the panel still opened in Hindi, because the
+address that had been given out and autocompleted ever since was `/hi/login`.
+A default that any stale bookmark silently overrides is not a default. The
+cookie is also the only signal -- automatic detection is off, since a browser
+whose language list happens to start with Hindi is not a choice anyone made.
+
+Everything the panel *displays* stays in the language it was
 written or spoken in -- farmer names and villages in Devanagari, product names
 as the catalogue holds them, prompts and greetings exactly as published, call
 transcripts in the language of the call. Translating those in the view would

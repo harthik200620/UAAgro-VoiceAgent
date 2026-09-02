@@ -3,49 +3,52 @@
 import { clsx } from "clsx";
 import { useLocale } from "next-intl";
 
-import { LOCALE_COOKIE, Link, routing, usePathname } from "@/i18n/routing";
+import { usePathname } from "@/i18n/routing";
+import { LOCALES } from "@/lib/locale-choice";
 
 const NAMES = { en: "EN", hi: "हिं" } as const;
 
 /**
- * EN / हिं: two links to the same page in the other language.
+ * EN / हिं: the panel's language, for this browser, from now on.
  *
- * Clicking one also records the choice in a cookie, so the next visit to the
- * bare address opens in that language rather than in the default.
+ * Two submit buttons rather than two links. The language is a setting the
+ * server records before it serves the next page (`/api/locale`), so that a
+ * page opened later -- from a bookmark, from history, from a link a colleague
+ * sent -- comes back in the language that was chosen here rather than the one
+ * that happens to be in the address.
  */
-function remember(locale: string) {
-  document.cookie = `${LOCALE_COOKIE}=${locale}; path=/; max-age=31536000; samesite=lax`;
-}
-
 export function LocaleSwitch({ label }: { label: string }) {
   const current = useLocale();
   const pathname = usePathname();
 
   return (
-    <div
+    <form
+      method="post"
+      action="/api/locale"
       role="group"
       aria-label={label}
       className="flex overflow-hidden rounded-btn border border-line bg-surface"
     >
-      {routing.locales.map((locale) => {
+      <input type="hidden" name="next" value={pathname} />
+      {LOCALES.map((locale) => {
         const active = locale === current;
         return (
-          <Link
+          <button
             key={locale}
-            href={pathname}
-            locale={locale}
+            type="submit"
+            name="locale"
+            value={locale}
             lang={locale}
-            onClick={() => remember(locale)}
             aria-current={active ? "true" : undefined}
             className={clsx(
-              "flex-1 py-[7px] text-center text-small",
-              active ? "bg-ink font-semibold text-paper hover:text-paper" : "text-muted hover:text-ink",
+              "flex-1 cursor-pointer py-[7px] text-center text-small",
+              active ? "bg-ink font-semibold text-paper" : "text-muted hover:text-ink",
             )}
           >
             {NAMES[locale]}
-          </Link>
+          </button>
         );
       })}
-    </div>
+    </form>
   );
 }

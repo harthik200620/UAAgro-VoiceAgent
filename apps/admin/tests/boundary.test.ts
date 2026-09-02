@@ -91,15 +91,27 @@ describe("the server-only boundary", () => {
     }
   });
 
-  it("routes every /api handler through the authenticating proxy", () => {
+  it("routes every /api handler that reaches the control plane through the proxy", () => {
     // The proxy is where the session is checked and the bearer token is
     // attached. A handler that fetched the API by itself would either forget
     // the 401 or, worse, accept a token from the request.
+    //
+    // One handler reaches nothing: `/api/locale` records which language this
+    // browser wants and redirects. It is named here rather than detected, so
+    // a handler that quietly stopped using the proxy could not join it.
+    const REACHES_NOTHING = new Set(["app/api/locale/route.ts"]);
     const handlers = FILES.filter((file) => /^app\/api\/.*\/route\.ts$/.test(file.path));
-    expect(handlers.length).toBe(5);
+    expect(handlers.length).toBe(6);
     for (const file of handlers) {
-      expect(file.source, `${file.path} bypasses proxyApi`).toContain("proxyApi(");
       expect(file.source, `${file.path} builds its own fetch`).not.toMatch(/\bfetch\(/);
+      if (REACHES_NOTHING.has(file.path)) {
+        expect(
+          file.source,
+          `${file.path} is listed as reaching nothing but calls the control plane`,
+        ).not.toContain("proxyApi(");
+        continue;
+      }
+      expect(file.source, `${file.path} bypasses proxyApi`).toContain("proxyApi(");
     }
   });
 

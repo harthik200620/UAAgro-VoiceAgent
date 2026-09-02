@@ -1,6 +1,8 @@
 import { createNavigation } from "next-intl/navigation";
 import { defineRouting } from "next-intl/routing";
 
+import { DEFAULT_LOCALE, LOCALES } from "@/lib/locale-choice";
+
 /**
  * Two UIs, one set of data.
  *
@@ -17,18 +19,15 @@ import { defineRouting } from "next-intl/routing";
  *
  * The panel opens in English. `localeDetection` is off so that a browser
  * whose language list happens to start with Hindi is not routed there
- * uninvited; Hindi is the switch in the sidebar, and `middleware.ts` remembers
- * that choice for the next visit.
+ * uninvited; Hindi is the switch in the sidebar, and the setting it records
+ * decides the language of every page after that -- see `lib/locale-choice.ts`.
  */
 export const routing = defineRouting({
-  locales: ["en", "hi"],
-  defaultLocale: "en",
+  locales: LOCALES,
+  defaultLocale: DEFAULT_LOCALE,
   localePrefix: "always",
   localeDetection: false,
 });
-
-/** Where the sidebar switch records the language, read for the next visit to `/`. */
-export const LOCALE_COOKIE = "NEXT_LOCALE";
 
 export type Locale = (typeof routing.locales)[number];
 
