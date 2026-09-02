@@ -75,7 +75,19 @@ is loaded the knowledge base answers from word matching only and the panel's
 
 ## 4. Point the telephony at it
 
-In Exotel, create a flow in **App Bazaar** containing a **Voicebot** applet pointed at
+**Before any of this: the Voicebot applet has to be switched on for the
+account.** It is not available by default — a new account has no Stream or
+Voicebot applet in the list, and there is no way to add one from the console.
+Exotel enables it after KYC, on request:
+
+- Submit the company documents through standard onboarding.
+- Email `hello@exotel.com`, subject **"Enable Stream/Voicebot Applet for
+  &lt;ACCOUNT SID&gt;"**, with a line on the use case.
+
+The two can run in parallel. Until it is done, the flow below cannot be built,
+so it is the first thing to start and the longest to wait for.
+
+Then, in Exotel, create a flow in **App Bazaar** containing a **Voicebot** applet pointed at
 `wss://voice.<domain>/ws/voice?token=<TELEPHONY_WS_TOKEN>`, followed by a Hangup
 applet, and attach it to the inbound DID.
 
