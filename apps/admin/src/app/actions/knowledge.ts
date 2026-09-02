@@ -5,14 +5,14 @@ import { randomUUID } from "node:crypto";
 import { getTranslations } from "next-intl/server";
 import { revalidatePath } from "next/cache";
 
-import type { KbDocumentRow, KnowledgeAnswer } from "@/lib/contract";
+import type { KbDocumentRow, KnowledgeAnswer, KnowledgeScope } from "@/lib/contract";
 import { can } from "@/lib/rbac";
 import {
   addKbUrl,
   askKnowledge,
   deleteKbDocument,
   failure,
-  setKbPublished,
+  patchKbDocument,
   uploadKbDocument,
   type ActionResult,
 } from "@/server/api";
@@ -28,6 +28,7 @@ import { currentSession } from "@/server/session";
  */
 
 const KNOWLEDGE_PAGE = "/[locale]/(panel)/inbound/knowledge";
+const OUTBOUND_KNOWLEDGE_PAGE = "/[locale]/(panel)/outbound/knowledge";
 
 export type UploadState =
   | { status: "idle" }
@@ -45,6 +46,7 @@ export async function addDocument(_previous: UploadState, formData: FormData): P
   const url = String(formData.get("url") ?? "").trim();
   const title = String(formData.get("title") ?? "").trim();
   const language = String(formData.get("language") ?? "").trim();
+  const scope = asScope(formData.get("scope"));
 
   try {
     let row: KbDocumentRow;
@@ -53,13 +55,15 @@ export async function addDocument(_previous: UploadState, formData: FormData): P
       body.set("file", file, file.name);
       if (title) body.set("title", title);
       if (language) body.set("language", language);
+      body.set("scope", scope);
       row = await uploadKbDocument(session, body, randomUUID());
     } else if (url) {
-      row = await addKbUrl(session, { url, ...(title ? { title } : {}) }, randomUUID());
+      row = await addKbUrl(session, { url, scope, ...(title ? { title } : {}) }, randomUUID());
     } else {
       return { status: "error", message: t("nothingToAdd") };
     }
     revalidatePath(KNOWLEDGE_PAGE, "page");
+    revalidatePath(OUTBOUND_KNOWLEDGE_PAGE, "page");
     return { status: "queued", title: row.title };
   } catch (error) {
     return { status: "error", message: failure(error, t("uploadFailed")).message };
@@ -70,18 +74,39 @@ export async function setDocumentPublished(
   documentId: string,
   isPublished: boolean,
 ): Promise<ActionResult<KbDocumentRow>> {
+  return change(documentId, { isPublished });
+}
+
+/** Which calls may quote this document: the helpline, campaign calls, or both. */
+export async function setDocumentScope(
+  documentId: string,
+  scope: KnowledgeScope,
+): Promise<ActionResult<KbDocumentRow>> {
+  return change(documentId, { scope });
+}
+
+async function change(
+  documentId: string,
+  patch: { isPublished?: boolean; scope?: KnowledgeScope },
+): Promise<ActionResult<KbDocumentRow>> {
   const t = await getTranslations("actions");
   const session = await currentSession();
   if (!session || !can(session, "knowledge.upload")) {
     return { ok: false, message: t("forbidden"), code: "forbidden" };
   }
   try {
-    const row = await setKbPublished(session, documentId, isPublished);
+    const row = await patchKbDocument(session, documentId, patch);
     revalidatePath(KNOWLEDGE_PAGE, "page");
+    revalidatePath(OUTBOUND_KNOWLEDGE_PAGE, "page");
     return { ok: true, value: row };
   } catch (error) {
     return failure(error, t("changeFailed"));
   }
+}
+
+/** A scope from a form field. Anything unexpected means "both", the safe default. */
+function asScope(value: FormDataEntryValue | null): KnowledgeScope {
+  return value === "inbound" || value === "outbound" ? value : "both";
 }
 
 export async function removeDocument(documentId: string): Promise<ActionResult<null>> {
@@ -93,6 +118,7 @@ export async function removeDocument(documentId: string): Promise<ActionResult<n
   try {
     await deleteKbDocument(session, documentId);
     revalidatePath(KNOWLEDGE_PAGE, "page");
+    revalidatePath(OUTBOUND_KNOWLEDGE_PAGE, "page");
     return { ok: true, value: null };
   } catch (error) {
     return failure(error, t("changeFailed"));
@@ -103,6 +129,7 @@ export async function removeDocument(documentId: string): Promise<ActionResult<n
 export async function askQuestion(
   question: string,
   answer: boolean,
+  direction: "inbound" | "outbound" = "inbound",
 ): Promise<ActionResult<KnowledgeAnswer>> {
   const t = await getTranslations("actions");
   const session = await currentSession();
@@ -112,7 +139,7 @@ export async function askQuestion(
   const trimmed = question.trim();
   if (!trimmed) return { ok: false, message: t("askSomething"), code: "validation_error" };
   try {
-    return { ok: true, value: await askKnowledge(session, trimmed, answer) };
+    return { ok: true, value: await askKnowledge(session, trimmed, answer, direction) };
   } catch (error) {
     return failure(error, t("askFailed"));
   }

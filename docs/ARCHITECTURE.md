@@ -1193,6 +1193,113 @@ dimension §1 N1 cares most about becomes the least reliable one.
   the conversation loop, which persists it with the turn it belongs to. The tool
   is honest about this; the write lands in Phase 4 with the turn record.
 
+## Where the panel's time went, measured 2 September 2026
+
+"The website is slow" was reported against the development server, and most of
+it was the development server. The same pages, warm, on the same machine:
+
+| Page | `next dev` | `next start` |
+|---|---|---|
+| Live | 194 ms | 32 ms |
+| Calls | 339 ms | 70 ms |
+| Centres | 440 ms | 68 ms |
+| Flows | 228 ms | 26 ms |
+| Data | 4360 ms | 4050 ms |
+
+Every route also pays a one-off compile in development -- Calls was 1.7 s the
+first time. None of that exists in the built image, which is what the customer
+runs, so the honest answer to most of the report is "look at the build". `make
+admin-build` then `npx next start` is the way to see the panel as it will be.
+
+The Data page was the exception: slow in the build too, and slow for reasons
+worth fixing.
+
+**Four seconds of it was a probe of an object store that was not answering.**
+`/admin/data/connection` pinged Redis and S3 in sequence and returned only when
+both had replied or given up. So the page took as long as the slowest dead
+service, and the database facts an operator actually came for -- host, pool,
+version, all a millisecond away -- waited behind them. The probes now live at
+`/admin/data/health`, run at the same time, and are given two seconds each;
+the page renders without them and fills the two chips in when they arrive
+(`<Suspense>` around `HealthRows`). Table visible at 41 ms against 4050 ms.
+
+**Half a second was `pg_total_relation_size`.** It is not a lookup: it stats
+every file of the relation, its indexes and its TOAST. Asking it about every
+relation in the schema -- eighteen labelled tables, twenty-one monthly
+partitions and everything else -- was enough to hit the in-call statement
+timeout on a cold file cache. It now asks only about the tables the page
+lists, the exact row counts are one `UNION ALL` rather than eighteen round
+trips, and the whole report is measured at most once a minute (the page has
+always printed the moment it was counted).
+
+**One round trip per component was the session.** `currentSession()` fetches
+`/auth/me`, and the layout, the page and each Server Action called it
+separately -- three sequential requests before a page fetched anything it
+would show. It is wrapped in React's `cache` now: one render, one lookup. On a
+deployment where the panel and the control plane are different containers,
+that is three network hops saved per navigation rather than three loopback
+calls.
+
+**The Devanagari display face** was loaded on every page for one word on the
+sign-in screen. It is imported by that screen now.
+
+## One knowledge base, two kinds of call
+
+The outbound agent could always answer questions -- press 2 on an offer call
+hands the farmer to the same agent, with the same tools, as the helpline
+(§13.2). The panel offered the knowledge base under Inbound alone, which made
+it look as though offer calls had none, and left no way to say that a
+campaign's own material is not helpline material.
+
+`kb_documents.scope` says where a document is used: `inbound`, `outbound`, or
+`both`, which is the default and what every existing row was given. The filter
+is in retrieval, not in the panel -- `HybridRetriever.search(scope=...)`
+narrows both the lexical and the dense query, and the direction reaches it
+through `ToolContext.direction`, set when the agent is built for a call. A
+document out of scope is not merely hidden from a list; the agent cannot reach
+it. `tests/test_knowledge.py` asserts that in both directions, and asserts that
+`both` stays reachable from either, because getting that default wrong would
+quietly narrow every document ever uploaded.
+
+The panel shows the same corpus from both sides: Inbound → Knowledge base and
+Outbound → Knowledge, each listing what its calls can reach and counting what
+is kept for the other. Uploads default to `both` from either side. Defaulting
+to the side the operator happens to be standing on would make the product
+catalogue helpline-only because that is where somebody uploaded it, and the
+failure would surface much later, as an offer call that cannot answer a
+question about a product.
+
+## Contact lists arrive as spreadsheets
+
+The campaign form takes a pasted list, and that is still the only thing a
+campaign is created from -- one validated path, one place where a number
+becomes an MSISDN. But nobody keeps farmer numbers as pasted text. A CSV used
+to be read in the browser; spreadsheets could not be read at all, so the
+operator was expected to open Excel, select a column and paste, which is how
+numbers get lost a row at a time.
+
+`POST /admin/campaigns/contacts/extract` reads `.xlsx`, `.csv`, `.tsv` and
+plain text in Python (`services/contact_import.py`) and hands back the same
+`name, number` lines for the operator to look at before anything is created.
+Reading it on the server rather than in the browser is deliberate: a workbook
+is a zip of XML, and "which cell is the phone number" is the same judgement
+the pasted-list parser already makes -- one implementation, in one language,
+with tests.
+
+Three things real spreadsheets do, each of them a farmer who would not be
+called:
+
+- **A number stored as a number.** Excel writes 9876543210 as a float, so the
+  obvious `str(value)` yields "9876543210.0" and the last digit silently
+  becomes a zero.
+- **A header row.** Dropped by not matching, never by position: a file whose
+  first row is data would otherwise lose a contact.
+- **A name with a comma in it.** "Yadav, Ramesh" would split the line the
+  parser reads, so the comma inside the name goes rather than the name.
+
+`.xls`, the pre-2007 binary format, is refused with instructions to save as
+`.xlsx` -- openpyxl cannot read it, and "that file is broken" would be a lie.
+
 ## The operations panel, and what it forced into the media path
 
 The panel was rebuilt to six sections -- Live, Calls, Outbound, Inbound, Flows,

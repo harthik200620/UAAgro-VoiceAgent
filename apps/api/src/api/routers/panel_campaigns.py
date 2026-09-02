@@ -33,7 +33,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -62,6 +62,7 @@ from uaagro_domain.settings import get_defaults, get_settings
 
 from ..security.deps import DbDep, Principal, PrincipalDep, require_role
 from ..services import jobs
+from ..services.contact_import import extract_contacts
 from ..services.events import relay, streaming_response
 from ._panel import iso, panel_status, short_session
 
@@ -572,6 +573,52 @@ async def _scrub(db: AsyncSession, campaign: Campaign) -> list[tuple[str, int]]:
         removed[failure.value] = removed.get(failure.value, 0) + 1
     await db.flush()
     return sorted(removed.items())
+
+
+class ExtractedContacts(BaseModel):
+    """What a file offered, before anything is created from it."""
+
+    lines: list[str]
+    found: int
+    skipped: int
+    sheets: int
+
+
+@router.post("/contacts/extract", response_model=ExtractedContacts)
+async def extract(
+    _: Annotated[Principal, require_role(Role.OPS_MANAGER)],
+    file: Annotated[UploadFile, File()],
+) -> ExtractedContacts:
+    """Read a spreadsheet or CSV and hand back the contact lines it contains.
+
+    Nothing is stored and no campaign is created: the operator sees the list
+    in the same box they would have pasted into, edits it if a row came out
+    wrong, and creates the campaign from that. Which means a file cannot
+    smuggle in a number the person who uploaded it did not see.
+
+    The reading is done here rather than in the browser because a spreadsheet
+    is a zip archive of XML, and because "which cell is the phone number" is
+    the same judgement the pasted-list parser already makes -- one
+    implementation, in one language, with tests.
+    """
+    if not file.filename:
+        raise ValidationError("No file was sent.", remedy="Choose a spreadsheet or a CSV file.")
+    data = await file.read()
+    found = extract_contacts(data, filename=file.filename)
+    log.info(
+        "campaign.contacts_extracted",
+        # Never the numbers, never the file name: a list of farmers is a list
+        # of farmers whatever it is called (§23-6).
+        found=len(found.lines),
+        skipped=found.skipped,
+        sheets=found.sheets,
+    )
+    return ExtractedContacts(
+        lines=found.lines,
+        found=len(found.lines),
+        skipped=found.skipped,
+        sheets=found.sheets,
+    )
 
 
 _NUMBER = re.compile(r"(?:\+?91[\s-]?)?0?[6-9]\d{9}")

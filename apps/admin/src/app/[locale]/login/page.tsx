@@ -1,6 +1,7 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { redirect } from "next/navigation";
 
+import { heroFont } from "@/app/fonts";
 import { LoginForm } from "@/components/login-form";
 import { Icon } from "@/components/ui/icon";
 import { currentSession } from "@/server/session";
@@ -26,7 +27,11 @@ export default async function LoginPage({
 
   return (
     <div className="flex min-h-screen">
-      <section className="relative hidden w-[660px] shrink-0 flex-col justify-between overflow-hidden bg-brand px-14 py-12 text-paper lg:flex">
+      {/* The display face is loaded here rather than in the root layout: this
+          is the only screen that sets a word in it. */}
+      <section
+        className={`${heroFont.variable} relative hidden w-[660px] shrink-0 flex-col justify-between overflow-hidden bg-brand px-14 py-12 text-paper lg:flex`}
+      >
         <div
           aria-hidden="true"
           className="absolute -bottom-40 -right-[120px] h-[520px] w-[520px] rounded-full border border-paper/[.18]"

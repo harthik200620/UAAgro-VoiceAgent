@@ -455,11 +455,15 @@ async def internal_knowledge_search(request: Request) -> JSONResponse:
     want_answer = bool(body.get("answer"))
     if not question:
         return JSONResponse({"error": "question is empty"}, status_code=422)
+    # Which side of the panel is asking. The answer differs, because a
+    # document can be marked for one direction, and an operator testing the
+    # offer script should be shown what an offer call would actually find.
+    direction = str(body.get("direction") or "inbound")
     retriever = state.retriever or HybridRetriever()
 
     started = time.perf_counter()
     async with incall_session() as db:
-        found = await retriever.search(db, question, language=language)
+        found = await retriever.search(db, question, language=language, scope=direction)
     retrieval_ms = round((time.perf_counter() - started) * 1000)
 
     payload: dict[str, Any] = {
@@ -479,11 +483,11 @@ async def internal_knowledge_search(request: Request) -> JSONResponse:
         "answer": None,
     }
     if want_answer:
-        payload["answer"] = await _answer_for_panel(question, language)
+        payload["answer"] = await _answer_for_panel(question, language, direction)
     return JSONResponse(payload)
 
 
-async def _answer_for_panel(question: str, language: str) -> dict[str, Any]:
+async def _answer_for_panel(question: str, language: str, direction: str) -> dict[str, Any]:
     """Run one agent turn the way a call would, and time it."""
     settings = get_settings()
     defaults = get_defaults()
@@ -505,6 +509,7 @@ async def _answer_for_panel(question: str, language: str) -> dict[str, Any]:
         gateway=build_gateway(settings),
         caller=Caller(language=language or defaults.default_language),
         call_id=uuid.uuid4(),
+        direction=direction,
     )
     try:
         result = await agent.handle(question)

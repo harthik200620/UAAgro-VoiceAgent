@@ -83,6 +83,9 @@ SKIP_DIRS = {
     "node_modules",
     ".venv",
     ".next",
+    # The dev server's own output directory (`next.config.ts` keeps it apart
+    # from the build's, so the two cannot corrupt each other).
+    ".next-dev",
     "dist",
     "build",
     "__pycache__",

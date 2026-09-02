@@ -1,6 +1,7 @@
 import { getTranslations } from "next-intl/server";
 
 import { CampaignList } from "@/components/outbound/campaign-list";
+import { OutboundTabs } from "@/components/outbound/outbound-tabs";
 import { ButtonLink } from "@/components/ui/button";
 import { Forbidden } from "@/components/ui/forbidden";
 import { PageHeader } from "@/components/ui/page-header";
@@ -26,6 +27,7 @@ export default async function OutboundPage() {
           </ButtonLink>
         ) : null}
       </PageHeader>
+      <OutboundTabs session={session} active="campaigns" />
       <CampaignList campaigns={campaigns} />
     </>
   );

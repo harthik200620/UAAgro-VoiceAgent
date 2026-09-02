@@ -12,7 +12,16 @@ import { inputClass } from "@/components/ui/field";
  * The dashed area under the documents table. Choosing a file submits at
  * once; a website address goes with the small form beside it. Both land in
  * the same Server Action, which decides between multipart and JSON.
+ *
+ * "Used on" defaults to both kinds of call, from either side of the panel.
+ * Defaulting to the side the operator happens to be standing on would make
+ * the product catalogue helpline-only because that is where it was uploaded,
+ * and the failure would surface as an offer call that cannot answer a
+ * question about a product.
  */
+const selectClass =
+  "rounded-btn border border-line bg-surface px-2.5 py-1.5 text-body text-ink";
+
 export function UploadZone({ fileInput }: { fileInput: RefObject<HTMLInputElement | null> }) {
   const t = useTranslations("knowledge.upload");
   const [state, action, pending] = useActionState<UploadState, FormData>(addDocument, {
@@ -36,6 +45,15 @@ export function UploadZone({ fileInput }: { fileInput: RefObject<HTMLInputElemen
             if (event.target.files?.length) event.target.form?.requestSubmit();
           }}
         />
+      </label>
+
+      <label className="flex items-center gap-2.5 text-body text-muted">
+        {t("usedOn")}
+        <select name="scope" defaultValue="both" disabled={pending} className={selectClass}>
+          <option value="both">{t("scopeBoth")}</option>
+          <option value="inbound">{t("scopeInbound")}</option>
+          <option value="outbound">{t("scopeOutbound")}</option>
+        </select>
       </label>
 
       <div className="flex items-end gap-2.5">

@@ -7,8 +7,13 @@ import {
 } from "next/font/google";
 
 /**
- * The five faces of the design, self-hosted by next/font: no request leaves
- * for Google at runtime and text never flashes through a fallback face.
+ * The faces of the design, self-hosted by next/font: no request leaves for
+ * Google at runtime and text never flashes through a fallback face.
+ *
+ * Four of them are on every page. The fifth, the Devanagari display face, is
+ * imported by the sign-in screen alone -- it sets one word there and nothing
+ * anywhere else, and a face that large has no business being fetched by an
+ * operator who is looking at a call.
  */
 const sans = IBM_Plex_Sans({
   subsets: ["latin"],
@@ -38,14 +43,19 @@ const serif = Instrument_Serif({
   display: "swap",
 });
 
-// Only the login hero, "नमस्ते।", uses it.
-const hero = Tiro_Devanagari_Hindi({
+/**
+ * The sign-in hero, "नमस्ते।", and nothing else.
+ *
+ * Exported on its own and applied by that page, so its bytes are requested by
+ * the one route that renders it.
+ */
+export const heroFont = Tiro_Devanagari_Hindi({
   subsets: ["devanagari"],
   weight: "400",
   variable: "--font-hero",
   display: "swap",
 });
 
-export const fontVariables = [sans, devanagari, mono, serif, hero]
+export const fontVariables = [sans, devanagari, mono, serif]
   .map((font) => font.variable)
   .join(" ");

@@ -377,9 +377,7 @@ async def test_ingestion_indexes_the_corpus(ingested) -> None:  # type: ignore[n
 
 
 @pytest.mark.integration
-async def test_ingesting_twice_re_embeds_nothing(
-    app_engine, embedder
-) -> None:  # type: ignore[no-untyped-def]
+async def test_ingesting_twice_re_embeds_nothing(app_engine, embedder) -> None:  # type: ignore[no-untyped-def]
     """§9: re-embed on version change only. Otherwise a one-line edit costs the
     whole corpus."""
     maker = async_sessionmaker(app_engine, expire_on_commit=False)
@@ -425,9 +423,7 @@ async def test_a_chunker_change_re_chunks_an_unchanged_document(
         same = await ingest_markdown(
             session, title="ver-test", markdown=markdown, doc_type="test", embedder=embedder
         )
-        monkeypatch.setattr(
-            ingest_module, "CHUNKER_VERSION", ingest_module.CHUNKER_VERSION + 1
-        )
+        monkeypatch.setattr(ingest_module, "CHUNKER_VERSION", ingest_module.CHUNKER_VERSION + 1)
         bumped = await ingest_markdown(
             session, title="ver-test", markdown=markdown, doc_type="test", embedder=embedder
         )
@@ -443,16 +439,18 @@ async def test_a_chunker_change_re_chunks_an_unchanged_document(
 
 
 @pytest.mark.integration
-async def test_an_edited_document_loses_its_approval(
-    app_engine, embedder
-) -> None:  # type: ignore[no-untyped-def]
+async def test_an_edited_document_loses_its_approval(app_engine, embedder) -> None:  # type: ignore[no-untyped-def]
     """The reviewer approved the text that was there, not what replaced it."""
     maker = async_sessionmaker(app_engine, expire_on_commit=False)
     async with maker() as session:
         await session.execute(text("SELECT set_config('app.role','ops_manager',true)"))
         await ingest_markdown(
-            session, title="edit-test", markdown="# A\n\nfirst.", doc_type="test",
-            embedder=embedder, publish=True,
+            session,
+            title="edit-test",
+            markdown="# A\n\nfirst.",
+            doc_type="test",
+            embedder=embedder,
+            publish=True,
         )
         await session.execute(
             text(
@@ -462,8 +460,11 @@ async def test_an_edited_document_loses_its_approval(
             )
         )
         await ingest_markdown(
-            session, title="edit-test", markdown="# A\n\nsecond, different.",
-            doc_type="test", embedder=embedder,
+            session,
+            title="edit-test",
+            markdown="# A\n\nsecond, different.",
+            doc_type="test",
+            embedder=embedder,
         )
         row = (
             await session.execute(
@@ -483,9 +484,7 @@ async def test_an_edited_document_loses_its_approval(
 
 
 @pytest.mark.integration
-async def test_an_unpublished_document_is_never_retrieved(
-    app_engine, embedder
-) -> None:  # type: ignore[no-untyped-def]
+async def test_an_unpublished_document_is_never_retrieved(app_engine, embedder) -> None:  # type: ignore[no-untyped-def]
     """§9: ingestion is not publication. Uploading a file must not put its text
     in front of a caller."""
     maker = async_sessionmaker(app_engine, expire_on_commit=False)
@@ -517,6 +516,75 @@ async def test_an_unpublished_document_is_never_retrieved(
         async with maker() as session:
             await session.execute(text("SELECT set_config('app.role','ops_manager',true)"))
             await session.execute(text("DELETE FROM kb_documents WHERE title = 'draft-test'"))
+            await session.commit()
+
+
+@pytest.mark.integration
+async def test_a_document_is_only_reachable_from_the_calls_it_is_marked_for(
+    app_engine, embedder
+) -> None:  # type: ignore[no-untyped-def]
+    """§9: scope is enforced by retrieval, not by hiding a row in the panel.
+
+    A campaign's own material must not be read out on the helpline weeks
+    later, and the helpline's must not be quoted on an offer call when the
+    operator has said otherwise. Both directions are asserted, along with the
+    default -- a document marked ``both`` is reachable either way -- because
+    getting that one wrong would quietly narrow every document ever uploaded.
+    """
+    maker = async_sessionmaker(app_engine, expire_on_commit=False)
+    offer = "zynthetic paddy offer sixteen"
+    helpline = "zynthetic paddy helpline sixteen"
+    shared = "zynthetic paddy shared sixteen"
+
+    async with maker() as session:
+        await session.execute(text("SELECT set_config('app.role','ops_manager',true)"))
+        for title, marker in (
+            ("scope-outbound", offer),
+            ("scope-inbound", helpline),
+            ("scope-both", shared),
+        ):
+            await ingest_markdown(
+                session,
+                title=title,
+                markdown=f"# Scope\n\n## S\n\n{marker} is described here.",
+                doc_type="test",
+                embedder=embedder,
+                publish=True,
+            )
+        await session.execute(
+            text("UPDATE kb_documents SET scope = 'outbound' WHERE title = 'scope-outbound'")
+        )
+        await session.execute(
+            text("UPDATE kb_documents SET scope = 'inbound' WHERE title = 'scope-inbound'")
+        )
+        await session.commit()
+
+    async def titles(query: str, scope: str | None) -> set[str]:
+        async with maker() as session:
+            await session.execute(text("SELECT set_config('app.role','voice_agent',true)"))
+            result = await HybridRetriever(embedder=embedder).search(
+                session, query, language="en-IN", scope=scope
+            )
+        return {chunk.document_title for chunk in result.chunks}
+
+    try:
+        on_helpline = await titles(helpline + " " + offer + " " + shared, "inbound")
+        assert "scope-outbound" not in on_helpline
+        assert "scope-inbound" in on_helpline
+        assert "scope-both" in on_helpline
+
+        on_campaign = await titles(helpline + " " + offer + " " + shared, "outbound")
+        assert "scope-inbound" not in on_campaign
+        assert "scope-outbound" in on_campaign
+        assert "scope-both" in on_campaign
+
+        # No scope is the corpus-wide view the ingest CLI and the eval use.
+        everything = await titles(helpline + " " + offer + " " + shared, None)
+        assert {"scope-inbound", "scope-outbound", "scope-both"} <= everything
+    finally:
+        async with maker() as session:
+            await session.execute(text("SELECT set_config('app.role','ops_manager',true)"))
+            await session.execute(text("DELETE FROM kb_documents WHERE title LIKE 'scope-%'"))
             await session.commit()
 
 
@@ -568,9 +636,7 @@ async def test_the_twenty_seeded_queries_retrieve_the_right_section(
 
 
 @pytest.mark.integration
-async def test_the_gate_does_not_regress(
-    ingested, app_engine
-) -> None:  # type: ignore[no-untyped-def]
+async def test_the_gate_does_not_regress(ingested, app_engine) -> None:  # type: ignore[no-untyped-def]
     """The §21 number itself, so it can only move up.
 
     The per-query tests xfail the five known misses, which on its own would let
@@ -592,9 +658,7 @@ async def test_the_gate_does_not_regress(
 
 
 @pytest.mark.integration
-async def test_both_languages_are_always_searched(
-    ingested, app_engine
-) -> None:  # type: ignore[no-untyped-def]
+async def test_both_languages_are_always_searched(ingested, app_engine) -> None:  # type: ignore[no-untyped-def]
     """§9. Searching only the caller's language is how a system with the right
     document in it returns nothing."""
     _, retriever = ingested
@@ -703,9 +767,7 @@ async def test_an_irrelevant_question_is_not_presented_as_answered(
 
 
 @pytest.mark.integration
-async def test_the_answer_cache_is_tried_before_retrieval(
-    ingested, app_engine
-) -> None:  # type: ignore[no-untyped-def]
+async def test_the_answer_cache_is_tried_before_retrieval(ingested, app_engine) -> None:  # type: ignore[no-untyped-def]
     """§9 Tier 3: a hit skips the LLM and, with pre-synthesised audio, the TTS."""
     _, retriever = ingested
     maker = async_sessionmaker(app_engine, expire_on_commit=False)

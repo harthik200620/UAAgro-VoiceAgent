@@ -268,9 +268,7 @@ async def identify_caller(
         return Caller(language=default_language)
     try:
         farmer = await session.scalar(
-            select(Farmer).where(
-                Farmer.phone_hash == phone_hash, Farmer.deleted_at.is_(None)
-            )
+            select(Farmer).where(Farmer.phone_hash == phone_hash, Farmer.deleted_at.is_(None))
         )
     except Exception as exc:
         log.warning("assembly.caller_lookup_failed", error=type(exc).__name__)
@@ -470,9 +468,7 @@ async def build_call_pipeline(
     agent_settings = await load_agent_settings(
         session, organization_id=organization_id, flow_type=flow_type, config_id=pinned
     )
-    caller = await identify_caller(
-        session, phone_hash, default_language=defaults.default_language
-    )
+    caller = await identify_caller(session, phone_hash, default_language=defaults.default_language)
     centre = await _centre_named(session, caller.centre_id)
 
     # §5.1's declarative routing. Chosen from the caller's language, which is
@@ -485,9 +481,7 @@ async def build_call_pipeline(
         # idea "इमिडाक्लोप्रिड" is a word, and every product question starts
         # from a transcript the matcher then has to repair.
         keyterms = tuple(lexicon.keyterms()) if lexicon is not None else ()
-        stack = build_speech_stack(
-            caller.language, settings, defaults, keyterms=keyterms
-        )
+        stack = build_speech_stack(caller.language, settings, defaults, keyterms=keyterms)
     # Opened concurrently with everything below, and awaited just before the
     # greeting is handed back.
     #
@@ -526,6 +520,10 @@ async def build_call_pipeline(
                 gateway=resolved_gateway,
                 caller=caller,
                 call_id=call_id,
+                # Press 2 is answered by the helpline agent, but on an
+                # outbound call: it may quote the campaign's own material and
+                # not documents kept for the helpline.
+                direction=CallDirection.OUTBOUND.value,
             )
         responder = OutboundResponder(
             script=OutboundScript.from_config(agent_settings.script),
@@ -550,6 +548,7 @@ async def build_call_pipeline(
             gateway=resolved_gateway,
             caller=caller,
             call_id=call_id,
+            direction=CallDirection.INBOUND.value,
         )
         responder = agent
         opening = render_greeting(agent_settings.greeting_template, caller)
@@ -617,6 +616,7 @@ def build_agent(
     gateway: LlmGateway,
     caller: Caller,
     call_id: uuid.UUID,
+    direction: str | None = None,
 ) -> Agent:
     """The DISCOVER ⇄ RESOLVE agent for one call, or for one panel question.
 
@@ -637,7 +637,7 @@ def build_agent(
         ),
         hint=DynamicHint(),
         flow=CallFlow(),
-        tool_context=ToolContext(call_id=str(call_id)),
+        tool_context=ToolContext(call_id=str(call_id), direction=direction),
     )
 
 

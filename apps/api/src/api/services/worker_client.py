@@ -73,10 +73,17 @@ class WorkerClient:
             )
         return response
 
-    async def search(self, question: str, *, language: str, answer: bool) -> dict[str, Any]:
+    async def search(
+        self, question: str, *, language: str, answer: bool, direction: str = "inbound"
+    ) -> dict[str, Any]:
         response = await self._post(
             "/internal/knowledge/search",
-            {"question": question, "language": language, "answer": answer},
+            {
+                "question": question,
+                "language": language,
+                "answer": answer,
+                "direction": direction,
+            },
         )
         if response.status_code >= 400:
             raise VendorError(

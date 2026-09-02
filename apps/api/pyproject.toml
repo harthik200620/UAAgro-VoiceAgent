@@ -17,6 +17,10 @@ dependencies = [
     # Named explicitly rather than inherited from uvicorn[standard]:
     # §7 depends on this loop and nothing was testing for it.
     "uvloop>=0.21; sys_platform != 'win32'",
+    # Contact lists arrive as spreadsheets more often than as text. openpyxl
+    # reads .xlsx without a spreadsheet application and without a service:
+    # the numbers never leave this process.
+    "openpyxl>=3.1",
     "uaagro-domain",
     "uaagro-db",
     "fastapi>=0.115",

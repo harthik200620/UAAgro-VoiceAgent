@@ -1,24 +1,31 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useActionState, useState } from "react";
+import { useActionState, useState, useTransition } from "react";
 
-import { createCampaignAction, type CreateCampaignState } from "@/app/actions/campaigns";
+import {
+  createCampaignAction,
+  readContacts,
+  type CreateCampaignState,
+} from "@/app/actions/campaigns";
 import { Button, buttonClass } from "@/components/ui/button";
 import { Field, inputClass } from "@/components/ui/field";
 import { Icon } from "@/components/ui/icon";
 import { Segmented } from "@/components/ui/segmented";
-import { countContacts, csvToContactLines } from "@/lib/contacts";
+import { countContacts } from "@/lib/contacts";
 
 import { GateResult } from "./gate-result";
 
 const CONCURRENCY = [1, 5, 10, 20, 30].map((value) => ({ value, label: String(value) }));
 
 /**
- * A campaign from a pasted list. A CSV is read in the browser and turned
- * into the same `name, number` lines, appended to the textarea, so the
- * operator sees exactly what will be sent before it goes. The consent box is
- * a legal attestation, so it is a real required checkbox and not a default.
+ * A campaign from a pasted list.
+ *
+ * A spreadsheet or CSV is read by the control plane and comes back as the
+ * same `name, number` lines, appended to the textarea -- so whichever way the
+ * numbers arrived, the operator sees exactly the list that will be sent, and
+ * there is one parser rather than one per file format. The consent box is a
+ * legal attestation, so it is a real required checkbox and not a default.
  */
 export function CampaignForm({ flows }: { flows: { id: string; name: string; version: number }[] }) {
   const t = useTranslations("newCampaign");
@@ -28,16 +35,37 @@ export function CampaignForm({ flows }: { flows: { id: string; name: string; ver
   );
   const [numbers, setNumbers] = useState("");
   const [concurrency, setConcurrency] = useState(10);
+  const [reading, startReading] = useTransition();
+  const [fileNote, setFileNote] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
   const count = countContacts(numbers);
 
   if (state.status === "created") {
     return <GateResult result={state.result} />;
   }
 
-  const appendCsv = async (file: File) => {
-    const lines = csvToContactLines(await file.text());
-    setNumbers((current) => [current.trimEnd(), ...lines].filter(Boolean).join("\n"));
-  };
+  const appendFile = (file: File) =>
+    startReading(async () => {
+      setFileNote(null);
+      const body = new FormData();
+      body.set("file", file, file.name);
+      const outcome = await readContacts(body);
+      if (!outcome.ok) {
+        setFileNote({ tone: "bad", text: outcome.message });
+        return;
+      }
+      const { lines, found, skipped } = outcome.value;
+      if (found === 0) {
+        setFileNote({ tone: "bad", text: t("readNothing") });
+        return;
+      }
+      setNumbers((current) => [current.trimEnd(), ...lines].filter(Boolean).join("\n"));
+      setFileNote({
+        tone: "ok",
+        text: skipped > 0
+          ? t("readFileSkipped", { found, skipped })
+          : t("readFile", { found, name: file.name }),
+      });
+    });
 
   return (
     <form action={action} className="flex flex-col gap-4.5">
@@ -69,21 +97,31 @@ export function CampaignForm({ flows }: { flows: { id: string; name: string; ver
           className={`${inputClass} font-mono text-body leading-relaxed`}
         />
       </Field>
-      <div>
+      <div className="flex items-center gap-3">
         <label className={buttonClass("secondary", "sm", "cursor-pointer")}>
           <Icon name="upload" />
-          <span>{t("uploadCsv")}</span>
+          <span>{reading ? t("reading") : t("uploadFile")}</span>
           <input
             type="file"
-            accept=".csv,text/csv,text/plain"
+            accept=".xlsx,.csv,.tsv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain"
             className="sr-only"
+            disabled={reading}
             onChange={(event) => {
               const file = event.target.files?.[0];
-              if (file) void appendCsv(file);
+              if (file) appendFile(file);
+              // Cleared so choosing the same file twice fires again.
               event.target.value = "";
             }}
           />
         </label>
+        {fileNote ? (
+          <span
+            role={fileNote.tone === "bad" ? "alert" : "status"}
+            className={fileNote.tone === "bad" ? "text-ui text-red-text" : "text-ui text-muted"}
+          >
+            {fileNote.text}
+          </span>
+        ) : null}
       </div>
 
       <div className="flex items-center gap-3">

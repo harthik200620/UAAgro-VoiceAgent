@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlsplit
 
 from alembic import op
@@ -71,7 +72,7 @@ POST_0001_COLUMNS: dict[str, tuple[str, ...]] = {
     # Revision 0007: the operations panel.
     "agent_configs": ("script",),
     "centres": ("manager_name",),
-    "kb_documents": ("ingest_status", "ingest_error", "page_count"),
+    "kb_documents": ("ingest_status", "ingest_error", "page_count", "scope"),
     "campaign_contacts": ("call_id",),
 }
 
@@ -212,10 +213,43 @@ def _subset(
     for name, table in copy.tables.items():
         for index in {i for i in table.indexes if i.name in unwanted}:
             table.indexes.discard(index)
-        for column_name in POST_0001_COLUMNS.get(name, ()):
+        later = POST_0001_COLUMNS.get(name, ())
+        if later:
+            # Indexes and constraints go before the columns they are built
+            # from. Dropping the column alone leaves an index definition
+            # naming a column this revision does not create, and `create_all`
+            # fails with "column does not exist" -- on a fresh database only,
+            # which is how it reaches CI rather than a developer.
+            for index in {i for i in table.indexes if _mentions(i.columns, later)}:
+                table.indexes.discard(index)
+            for constraint in {
+                c for c in table.constraints if _mentions(getattr(c, "columns", ()), later)
+            }:
+                table.constraints.discard(constraint)
+            for constraint in {c for c in table.constraints if _text_mentions(c, later)}:
+                table.constraints.discard(constraint)
+        for column_name in later:
             if column_name in table.c:
                 table._columns.remove(table.c[column_name])
     return copy
+
+
+def _mentions(columns: Any, names: tuple[str, ...]) -> bool:
+    """Whether any of ``names`` is among these columns."""
+    return any(column.name in names for column in columns)
+
+
+def _text_mentions(constraint: Any, names: tuple[str, ...]) -> bool:
+    """Whether a CHECK constraint's SQL text names one of these columns.
+
+    A check constraint carries an expression, not a column list, so the
+    columns it is built from cannot be read off it.
+    """
+    expression = getattr(constraint, "sqltext", None)
+    if expression is None:
+        return False
+    text_of = str(expression)
+    return any(name in text_of for name in names)
 
 
 def upgrade() -> None:
@@ -263,9 +297,7 @@ def upgrade() -> None:
     # Tables straight from the models, so schema and ORM agree by construction.
     # checkfirst=False: this is the initial migration, nothing exists yet, and
     # it keeps `alembic upgrade head --sql` (offline mode) working.
-    metadata = _subset(
-        Base.metadata, without_indexes=skip_indexes, without_tables=POST_0001_TABLES
-    )
+    metadata = _subset(Base.metadata, without_indexes=skip_indexes, without_tables=POST_0001_TABLES)
     metadata.create_all(bind=connection, checkfirst=False)
 
     # -- triggers --------------------------------------------------------- #

@@ -14,8 +14,10 @@ connection is a deployment change; the panel can test one before it is made.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
+from collections.abc import Coroutine
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from urllib.parse import urlsplit
@@ -85,6 +87,17 @@ class Connection(BaseModel):
     latencyMs: int
     serverVersion: str
     rowLevelSecurity: bool
+
+
+class Health(BaseModel):
+    """Whether the two services beside the database are answering.
+
+    Separate from :class:`Connection` because it is the only part of the Data
+    page that waits on something outside this process. A store that is down
+    answers by timing out, and the page should not: it renders, and this
+    arrives after it.
+    """
+
     redis: ServiceHealth
     storage: ServiceHealth
 
@@ -125,8 +138,29 @@ _LABELLED: list[tuple[str, str, str]] = [
 ]
 
 
+#: How long a storage report stands before it is measured again.
+#:
+#: On-disk sizes move at the pace of a day's calls, and the page prints the
+#: moment it was counted, so a report a minute old is honest and a reload is
+#: instant. It is one report for the whole deployment -- the catalogue does
+#: not vary by who is looking -- so there is nothing per-user to leak here.
+STORAGE_TTL_S = 60.0
+
+_cached_storage: tuple[float, Storage] | None = None
+
+
 @router.get("/storage", response_model=Storage)
 async def storage(db: DbDep, _: Annotated[Principal, require_role(Role.OPS_MANAGER)]) -> Storage:
+    global _cached_storage
+    now = time.monotonic()
+    if _cached_storage is not None and now - _cached_storage[0] < STORAGE_TTL_S:
+        return _cached_storage[1]
+    report = await _measure(db)
+    _cached_storage = (now, report)
+    return report
+
+
+async def _measure(db: Any) -> Storage:
     sizes = await _sizes(db)
     indexes = await _indexes(db)
     settings = get_settings()
@@ -163,7 +197,16 @@ async def storage(db: DbDep, _: Annotated[Principal, require_role(Role.OPS_MANAG
 
 
 async def _sizes(db: Any) -> dict[str, tuple[int, int, bool]]:
-    """Live row estimates and on-disk bytes per table, partitions folded in."""
+    """Live row estimates and on-disk bytes per table, partitions folded in.
+
+    Restricted to the tables the page lists. ``pg_total_relation_size`` is not
+    a lookup: it stats every file of the relation, its indexes and its TOAST,
+    so asking it about every relation in the schema -- which here means the
+    labelled tables, every monthly partition of three of them, and everything
+    else besides -- was most of the half-second this page took, and on a cold
+    file cache it was enough to hit the statement timeout.
+    """
+    names = [table for _, table, _ in _LABELLED]
     plain = (
         await db.execute(
             text(
@@ -173,9 +216,12 @@ async def _sizes(db: Any) -> dict[str, tuple[int, int, bool]]:
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
-                WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+                WHERE n.nspname = 'public'
+                  AND c.relkind IN ('r', 'p')
+                  AND c.relname = ANY(:names)
                 """
-            )
+            ),
+            {"names": names},
         )
     ).all()
     children = (
@@ -187,9 +233,11 @@ async def _sizes(db: Any) -> dict[str, tuple[int, int, bool]]:
                 FROM pg_inherits i
                 JOIN pg_class parent ON parent.oid = i.inhparent
                 LEFT JOIN pg_stat_user_tables s ON s.relid = i.inhrelid
+                WHERE parent.relname = ANY(:names)
                 GROUP BY parent.relname
                 """
-            )
+            ),
+            {"names": names},
         )
     ).all()
     folded = {name: (int(rows), int(size)) for name, rows, size in children}
@@ -205,14 +253,43 @@ async def _sizes(db: Any) -> dict[str, tuple[int, int, bool]]:
     # page in the panel. Everything else is counted exactly -- an estimate of
     # zero on a freshly seeded table reads as "the data is missing", which is
     # a worse answer than a query that takes a millisecond.
-    for name, (rows, size, partitioned) in list(out.items()):
-        if name in _ESTIMATED and rows > 0:
-            continue
-        if name not in {table for _, table, _ in _LABELLED}:
-            continue
-        exact = await db.scalar(text(f'SELECT count(*) FROM "{name}"'))  # noqa: S608
-        out[name] = (int(exact or 0), size, partitioned)
+    #
+    # All of them in one statement, not one round trip each. Eighteen counts
+    # of a few hundred rows are microseconds of work and were half a second of
+    # waiting, because each one paid for its own round trip through the pool.
+    wanted = [
+        name
+        for _, name, _ in _LABELLED
+        if name in out and not (name in _ESTIMATED and out[name][0] > 0)
+    ]
+    if wanted:
+        counts = await _count_all(db, wanted)
+        for name, exact in counts.items():
+            _, size, partitioned = out[name]
+            out[name] = (exact, size, partitioned)
     return out
+
+
+async def _count_all(db: Any, tables: list[str]) -> dict[str, int]:
+    """Exact row counts for several tables in a single round trip.
+
+    The table names are ours -- they come from ``_LABELLED`` by way of the
+    catalogue, never from a request -- but they are still checked against that
+    list before being written into SQL, so that the day someone makes the list
+    configurable this does not quietly become an injection point.
+    """
+    known = {name for _, name, _ in _LABELLED}
+    safe = [name for name in tables if name in known]
+    if not safe:
+        return {}
+    # The suppression is on the interpolation: `safe` is the intersection with
+    # _LABELLED above, so every name here is one of ours.
+    unions = " UNION ALL ".join(
+        f"SELECT '{name}' AS relation, count(*) AS rows FROM \"{name}\""  # noqa: S608
+        for name in safe
+    )
+    rows = (await db.execute(text(unions))).all()
+    return {str(name): int(count) for name, count in rows}
 
 
 #: Tables large enough that an estimate beats a count. Counted exactly only
@@ -261,24 +338,6 @@ async def connection(
     pool = get_app_engine().pool
     tls = any(key in (parts.query or "") for key in ("ssl=", "sslmode="))
 
-    redis_health = ServiceHealth(ok=False)
-    try:
-        started = time.perf_counter()
-        await get_redis().ping()
-        redis_health = ServiceHealth(
-            ok=True, latencyMs=round((time.perf_counter() - started) * 1000)
-        )
-    except Exception as exc:
-        log.warning("data.redis_unreachable", error=type(exc).__name__)
-
-    storage_health = ServiceHealth(ok=False, endpoint=settings.s3_endpoint)
-    try:
-        storage_health = ServiceHealth(
-            ok=await ObjectStore(settings).ping(), endpoint=settings.s3_endpoint
-        )
-    except Exception as exc:
-        log.warning("data.storage_unreachable", error=type(exc).__name__)
-
     return Connection(
         host=parts.hostname or "",
         port=parts.port or 5432,
@@ -290,9 +349,49 @@ async def connection(
         latencyMs=latency_ms,
         serverVersion=version,
         rowLevelSecurity=True,
-        redis=redis_health,
-        storage=storage_health,
     )
+
+
+@router.get("/health", response_model=Health)
+async def health(_: Annotated[Principal, require_role(Role.OPS_MANAGER)]) -> Health:
+    """Redis and object storage, probed at the same time and given a deadline.
+
+    Both at once rather than one after the other, because two dead services
+    should cost one wait rather than two, and neither gets longer than
+    ``PROBE_BUDGET_S``: past that the answer an operator needs is "it is not
+    answering", which is what a longer wait would eventually say anyway.
+    """
+    settings = get_settings()
+    redis_probe, storage_probe = await asyncio.gather(
+        _probe(_ping_redis()),
+        _probe(ObjectStore(settings).ping()),
+    )
+    return Health(
+        redis=redis_probe,
+        storage=ServiceHealth(
+            ok=storage_probe.ok, latencyMs=storage_probe.latencyMs, endpoint=settings.s3_endpoint
+        ),
+    )
+
+
+#: A service that has not answered by now is reported as not answering.
+PROBE_BUDGET_S = 2.0
+
+
+async def _ping_redis() -> bool:
+    await get_redis().ping()
+    return True
+
+
+async def _probe(check: Coroutine[Any, Any, bool]) -> ServiceHealth:
+    """Run one health check, and never let it hold the page."""
+    started = time.perf_counter()
+    try:
+        ok = await asyncio.wait_for(check, PROBE_BUDGET_S)
+    except Exception as exc:
+        log.warning("data.service_unreachable", error=type(exc).__name__)
+        return ServiceHealth(ok=False)
+    return ServiceHealth(ok=ok, latencyMs=round((time.perf_counter() - started) * 1000))
 
 
 @router.post("/connection/test", response_model=ConnectionTestResult)

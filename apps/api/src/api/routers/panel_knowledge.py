@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import structlog
 from fastapi import APIRouter, File, Form, Request, UploadFile
@@ -51,6 +51,13 @@ _SUPPORTED = {
 }
 
 
+#: Where a document may be quoted. Mirrors the check constraint on the column.
+Scope = Literal["inbound", "outbound", "both"]
+
+#: Which kind of call is asking.
+Direction = Literal["inbound", "outbound"]
+
+
 class KbDocumentRow(BaseModel):
     id: str
     title: str
@@ -64,6 +71,8 @@ class KbDocumentRow(BaseModel):
     ingestStatus: str
     ingestError: str | None
     isPublished: bool
+    #: "inbound", "outbound" or "both" -- which calls may quote this.
+    scope: str
     updatedAt: str
 
 
@@ -72,16 +81,21 @@ class CrawlBody(BaseModel):
     title: str | None = Field(default=None, max_length=300)
     maxPages: int = Field(default=100, ge=1, le=500)
     language: str | None = None
+    scope: Scope = "both"
 
 
 class PublishBody(BaseModel):
-    isPublished: bool
+    isPublished: bool | None = None
+    scope: Scope | None = None
 
 
 class Ask(BaseModel):
     question: str = Field(min_length=2, max_length=500)
     answer: bool = False
     language: str | None = None
+    #: Which kind of call to answer as. An offer call and the helpline can
+    #: reach different documents, so the panel says which it is testing.
+    direction: Direction = "inbound"
 
 
 class Passage(BaseModel):
@@ -118,6 +132,7 @@ def _row(doc: KbDocument, chunks: int, embedded: int) -> KbDocumentRow:
         ingestStatus=doc.ingest_status,
         ingestError=doc.ingest_error,
         isPublished=doc.is_published,
+        scope=doc.scope,
         updatedAt=doc.updated_at.isoformat(),
     )
 
@@ -160,6 +175,7 @@ async def add_document(
     file: Annotated[UploadFile | None, File()] = None,
     title: Annotated[str | None, Form()] = None,
     language: Annotated[str | None, Form()] = None,
+    scope: Annotated[str | None, Form()] = None,
 ) -> KbDocumentRow:
     """A file (multipart) or a website (JSON). Either way, indexing is queued."""
     content_type = request.headers.get("content-type", "")
@@ -176,6 +192,7 @@ async def add_document(
             language=(body.language or default_language)[:12],
             source=body.url.strip(),
             version=0,
+            scope=body.scope,
             content_hash=hashlib.sha256(body.url.encode()).hexdigest(),
             uploaded_by_user_id=principal.user_id,
             ingest_status="pending",
@@ -212,6 +229,7 @@ async def add_document(
         language=(language or default_language)[:12],
         source=file.filename[:300],
         version=0,
+        scope=_scope_or_both(scope),
         content_hash=hashlib.sha256(data).hexdigest(),
         uploaded_by_user_id=principal.user_id,
         ingest_status="pending",
@@ -263,24 +281,32 @@ async def set_published(
     )
     if doc is None:
         raise NotFoundError(resource="document", identifier=str(document_id))
+    if body.isPublished is None and body.scope is None:
+        raise ValidationError(
+            "Nothing to change.",
+            remedy="Send whether it is live, which calls may use it, or both.",
+        )
     if body.isPublished and doc.ingest_status != "indexed":
         raise ValidationError(
             "This document has not been indexed yet.",
             remedy="Wait for indexing to finish, or fix what it reported.",
         )
-    before = doc.is_published
-    doc.is_published = body.isPublished
-    if body.isPublished:
-        doc.approved_by_user_id = principal.user_id
-        doc.approved_at = datetime.now(UTC)
+    before = {"is_published": doc.is_published, "scope": doc.scope}
+    if body.scope is not None:
+        doc.scope = body.scope
+    if body.isPublished is not None:
+        doc.is_published = body.isPublished
+        if body.isPublished:
+            doc.approved_by_user_id = principal.user_id
+            doc.approved_at = datetime.now(UTC)
     await append_audit(
         db,
         action=AuditAction.PUBLISH if body.isPublished else AuditAction.UPDATE,
         resource_type="kb_document",
         resource_id=str(doc.id),
         actor_user_id=principal.user_id,
-        before={"is_published": before},
-        after={"is_published": doc.is_published},
+        before=before,
+        after={"is_published": doc.is_published, "scope": doc.scope},
     )
     return await _one(db, doc.id)
 
@@ -316,7 +342,7 @@ async def delete_document(
 async def ask(body: Ask, _: Annotated[Principal, require_role(Role.AGRONOMIST)]) -> AskResult:
     language = _base_language(body.language or get_defaults().default_language)
     result: dict[str, Any] = await WorkerClient().search(
-        body.question, language=language, answer=body.answer
+        body.question, language=language, answer=body.answer, direction=body.direction
     )
     answer = result.get("answer")
     return AskResult(
@@ -338,6 +364,17 @@ async def ask(body: Ask, _: Annotated[Principal, require_role(Role.AGRONOMIST)])
         if isinstance(answer, dict)
         else None,
     )
+
+
+def _scope_or_both(value: str | None) -> str:
+    """A scope from a form field, or the safe default.
+
+    Multipart carries strings, not enums, so this is the one place the value
+    is checked. Anything unrecognised becomes ``both`` rather than an error:
+    the operator asked to add a document, and refusing the upload over a
+    malformed hidden field would lose the file they just chose.
+    """
+    return value if value in ("inbound", "outbound", "both") else "both"
 
 
 def _title_from(filename: str) -> str:

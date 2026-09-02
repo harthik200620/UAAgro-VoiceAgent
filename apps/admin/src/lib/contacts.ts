@@ -1,9 +1,11 @@
 /**
  * The pasted contact list: one contact per line, `number` or `name, number`.
  *
- * Client-safe on purpose. A CSV is turned into the same text in the browser,
- * so the operator sees exactly the list that will be sent and the server
- * receives one shape whichever way the numbers arrived.
+ * Client-safe on purpose, and deliberately only a counter now: reading a file
+ * moved to the control plane (`services/contact_import.py`) when spreadsheets
+ * joined CSVs, because a workbook is a zip of XML and because "which cell is
+ * the phone number" should be decided once, in the language that also
+ * validates it, with tests.
  */
 
 const PHONE_SHAPE = /^\+?[\d\s\-()]{8,18}$/;

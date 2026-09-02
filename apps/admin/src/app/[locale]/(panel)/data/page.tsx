@@ -1,6 +1,11 @@
 import { getTranslations } from "next-intl/server";
+import { Suspense } from "react";
 
-import { AlsoRunningCard } from "@/components/data/also-running-card";
+import {
+  AlsoRunningCard,
+  HealthRows,
+  HealthRowsPending,
+} from "@/components/data/also-running-card";
 import { ConnectionCard } from "@/components/data/connection-card";
 import { StorageTable } from "@/components/data/storage-table";
 import { Card } from "@/components/ui/card";
@@ -39,7 +44,17 @@ export default async function DataPage() {
         </Card>
         <div className="flex w-[380px] shrink-0 flex-col gap-4">
           {connection ? <ConnectionCard connection={connection} /> : null}
-          <AlsoRunningCard storage={storage} connection={connection} />
+          {/* The two service probes are the only thing here that waits on
+              something outside the panel, so the page does not wait with
+              them: it renders, and the chips arrive when they answer. */}
+          <AlsoRunningCard
+            storage={storage}
+            health={
+              <Suspense fallback={<HealthRowsPending region={storage.recordings.region} />}>
+                <HealthRows region={storage.recordings.region} />
+              </Suspense>
+            }
+          />
         </div>
       </div>
     </>

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { cookies } from "next/headers";
+import { cache } from "react";
 import type { Role, Session } from "@/lib/rbac";
 import { ROLES } from "@/lib/rbac";
 
@@ -20,11 +21,16 @@ import { ROLES } from "@/lib/rbac";
  * Returns `null` rather than throwing when there is no session. The layout
  * renders a signed-out shell in that case; throwing here would turn "not
  * logged in yet" into a 500 on the login page itself.
+ *
+ * Wrapped in React's `cache`, so one page render asks the control plane who
+ * this is exactly once. Without it every layout, page and Server Action that
+ * needs the role opens its own request -- three round trips before the page
+ * has fetched anything it will actually show, on every navigation.
  */
 
 export const SESSION_COOKIE = "uaagro_session";
 
-export async function currentSession(): Promise<Session | null> {
+export const currentSession = cache(async (): Promise<Session | null> => {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
@@ -63,7 +69,7 @@ export async function currentSession(): Promise<Session | null> {
     // an unauthenticated user a role during one is worse.
     return null;
   }
-}
+});
 
 /**
  * Store the access token after a successful sign-in.

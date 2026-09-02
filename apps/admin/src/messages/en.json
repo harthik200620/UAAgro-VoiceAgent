@@ -288,7 +288,12 @@
       "open": "Open the campaign",
       "starting": "Starting…",
       "approveAndStart": "Approve and start calling"
-    }
+    },
+    "uploadFile": "Upload a spreadsheet or CSV",
+    "reading": "Reading the file…",
+    "readFile": "{found} numbers read from {name}",
+    "readFileSkipped": "{found} numbers read, {skipped} rows had none",
+    "readNothing": "No phone numbers were found in that file."
   },
   "checks": {
     "consent": "No recorded consent",
@@ -425,7 +430,8 @@
       "size": "Size",
       "pieces": "Pieces",
       "status": "Status",
-      "updated": "Updated"
+      "updated": "Updated",
+      "usedOn": "Used on"
     },
     "status": {
       "off": "Off",
@@ -466,7 +472,11 @@
       "url": "Or a website address",
       "title": "Title (optional)",
       "addUrl": "Add",
-      "queued": "“{title}” is being indexed — ready to answer from in a few minutes."
+      "queued": "“{title}” is being indexed — ready to answer from in a few minutes.",
+      "usedOn": "Used on",
+      "scopeBoth": "Both kinds of call",
+      "scopeInbound": "Helpline only",
+      "scopeOutbound": "Campaign calls only"
     },
     "ask": {
       "title": "Try a question",
@@ -480,6 +490,18 @@
       "foundInTime": "Found in",
       "fullAnswerIn": "Full answer in",
       "degraded": "Search ran in degraded mode; results may be incomplete."
+    },
+    "outboundTitle": "Outbound",
+    "outboundSubtitle": "What an offer call can answer with when a farmer presses 2.",
+    "usedOn": "Used on",
+    "scopes": {
+      "both": "Both",
+      "inbound": "Helpline only",
+      "outbound": "Campaign calls only"
+    },
+    "elsewhere": {
+      "inbound": "{count} kept for campaign calls only",
+      "outbound": "{count} kept for the helpline only"
     }
   },
   "centres": {
@@ -720,7 +742,14 @@
       "recordings": "Recordings",
       "backup": "Backup",
       "lastBackup": "last one {date}, {size}",
-      "noBackupYet": "none yet"
+      "noBackupYet": "none yet",
+      "checking": "checking…",
+      "unknown": "unknown"
     }
+  },
+  "outboundTabs": {
+    "label": "Outbound sections",
+    "campaigns": "Campaigns",
+    "knowledge": "Knowledge"
   }
 }

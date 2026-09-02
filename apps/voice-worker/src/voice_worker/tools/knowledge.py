@@ -46,9 +46,7 @@ log = structlog.get_logger(__name__)
 #: English price questions and let the Hindi ones straight through to
 #: retrieval, which is exactly the population this system is built for.
 _PRICE_QUESTION = re.compile(
-    whole_word(
-        "price|cost|rate|stock|available|कीमत|दाम|भाव|रेट|मूल्य|स्टॉक|उपलब्ध"
-    )
+    whole_word("price|cost|rate|stock|available|कीमत|दाम|भाव|रेट|मूल्य|स्टॉक|उपलब्ध")
     + r"|"
     + whole_word("कितने|कितना")
     + r"\s*"
@@ -67,6 +65,7 @@ _DOSE_QUESTION = re.compile(
 
 #: Matches no chunk, and forces the first ONNX inference off the call path.
 WARMUP_TERM = "zzzzwarmup"
+
 
 class SearchKnowledge(Tool):
     """Advisory prose, FAQs and scheme explanations."""
@@ -117,9 +116,7 @@ class SearchKnowledge(Tool):
                 "answered": False,
                 "reason": "price_and_stock_are_not_retrievable",
                 "use_instead": "check_availability",
-                "note": (
-                    "Price and stock change hourly and are never served from documents."
-                ),
+                "note": ("Price and stock change hourly and are never served from documents."),
                 "results": [],
             }
 
@@ -130,7 +127,13 @@ class SearchKnowledge(Tool):
                 return cached
 
             result = await self._retriever.search(
-                session, query, language=language, crop=str(crop) if crop else None
+                session,
+                query,
+                language=language,
+                crop=str(crop) if crop else None,
+                # Only what this kind of call may quote: a campaign's offer
+                # sheet is not helpline material, and the reverse holds too.
+                scope=context.direction,
             )
 
         if not result.chunks:
@@ -196,9 +199,7 @@ class SearchKnowledge(Tool):
         return payload
 
 
-async def _answer_cache(
-    session: AsyncSession, query: str, language: str
-) -> dict[str, Any] | None:
+async def _answer_cache(session: AsyncSession, query: str, language: str) -> dict[str, Any] | None:
     """Tier 3: the curated head of the distribution (§9).
 
     Matched on the stored question variants rather than on similarity. A cache

@@ -138,9 +138,17 @@ class HybridRetriever:
         *,
         language: str = "hi",
         crop: str | None = None,
+        scope: str | None = None,
         limit: int = FINAL_LIMIT,
     ) -> RetrievalResult:
-        """Retrieve, fuse and rerank."""
+        """Retrieve, fuse and rerank.
+
+        ``scope`` is the direction of the call this is being asked for --
+        ``inbound`` or ``outbound``. A document marked for the other direction
+        is not returned, so a campaign's offer sheet is not read out on the
+        helpline three weeks later. ``None`` searches everything, which is what
+        the ingest CLI and the retrieval eval want.
+        """
         query = query.strip()
         if not query:
             return RetrievalResult()
@@ -149,14 +157,13 @@ class HybridRetriever:
         # order while removing the duplicate when the caller speaks English.
         languages = tuple(dict.fromkeys([_base_language(language), "en"]))
 
-        lexical = await self._bm25(session, query, languages=languages, crop=crop)
+        scopes = _scopes_for(scope)
+        lexical = await self._bm25(session, query, languages=languages, crop=crop, scopes=scopes)
         dense, degraded, reason = await self._dense(
-            session, query, languages=languages, crop=crop
+            session, query, languages=languages, crop=crop, scopes=scopes
         )
 
-        fused = _reciprocal_rank_fusion(
-            {"bm25": lexical, "dense": dense}, limit=FUSE_LIMIT
-        )
+        fused = _reciprocal_rank_fusion({"bm25": lexical, "dense": dense}, limit=FUSE_LIMIT)
         ranked = await self._rerank(query, fused, limit=limit)
 
         log.info(
@@ -183,6 +190,7 @@ class HybridRetriever:
         *,
         languages: Sequence[str],
         crop: str | None,
+        scopes: tuple[str, ...] | None = None,
     ) -> list[RetrievedChunk]:
         """Full-text search over ``kb_chunks.search_vector``.
 
@@ -231,9 +239,10 @@ class HybridRetriever:
                 KbChunk.language.in_(list(languages)),
                 KbChunk.search_vector.op("@@")(tsquery),
             )
-            .order_by(text("rank DESC"))
-            .limit(CANDIDATE_LIMIT)
         )
+        if scopes is not None:
+            statement = statement.where(KbDocument.scope.in_(list(scopes)))
+        statement = statement.order_by(text("rank DESC")).limit(CANDIDATE_LIMIT)
         if crop:
             statement = statement.where(KbChunk.crop_tags.contains([crop]))
 
@@ -247,6 +256,7 @@ class HybridRetriever:
         *,
         languages: Sequence[str],
         crop: str | None,
+        scopes: tuple[str, ...] | None = None,
     ) -> tuple[list[RetrievedChunk], bool, str | None]:
         """Nearest neighbours over the pgvector HNSW index."""
         if self.embedder is None or not self.embedder.ready:
@@ -296,9 +306,10 @@ class HybridRetriever:
                 KbChunk.embedding.is_not(None),
                 KbChunk.language.in_(list(languages)),
             )
-            .order_by(distance)
-            .limit(CANDIDATE_LIMIT)
         )
+        if scopes is not None:
+            statement = statement.where(KbDocument.scope.in_(list(scopes)))
+        statement = statement.order_by(distance).limit(CANDIDATE_LIMIT)
         if crop:
             statement = statement.where(KbChunk.crop_tags.contains([crop]))
 
@@ -403,8 +414,7 @@ def _reciprocal_rank_fusion(
 
     ordered = sorted(scores, key=lambda cid: (-scores[cid], cid))
     return [
-        _with(best[cid], score=scores[cid], found_by=tuple(sources[cid]))
-        for cid in ordered[:limit]
+        _with(best[cid], score=scores[cid], found_by=tuple(sources[cid])) for cid in ordered[:limit]
     ]
 
 
@@ -436,6 +446,19 @@ def _row_to_chunk(row: Any, *, found_by: str) -> RetrievedChunk:
         contains_dose=carries_dose(row.content),
         found_by=(found_by,),
     )
+
+
+def _scopes_for(scope: str | None) -> tuple[str, ...] | None:
+    """Which document scopes a call of this direction may quote.
+
+    Always the shared material plus the one direction. ``None`` -- and any
+    value that is not a direction -- means no filter, which is what the ingest
+    CLI and the retrieval eval want: they are inspecting the corpus, not
+    answering a farmer.
+    """
+    if scope in ("inbound", "outbound"):
+        return ("both", scope)
+    return None
 
 
 def _base_language(language: str) -> str:

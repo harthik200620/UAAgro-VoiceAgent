@@ -4,7 +4,11 @@ import { clsx } from "clsx";
 import { useTranslations } from "next-intl";
 import { useRef, useState, useTransition } from "react";
 
-import { removeDocument, setDocumentPublished } from "@/app/actions/knowledge";
+import {
+  removeDocument,
+  setDocumentPublished,
+  setDocumentScope,
+} from "@/app/actions/knowledge";
 import { languageName } from "@/components/status/language-name";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -13,7 +17,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
 import { Table, Td, Th } from "@/components/ui/table";
-import type { KbDocumentRow } from "@/lib/contract";
+import type { KbDocumentRow, KnowledgeScope } from "@/lib/contract";
 import { dayOf, formatCount, formatDate, formatTime } from "@/lib/format";
 import { humanize, ingestTone, messageKey } from "@/lib/tones";
 
@@ -28,10 +32,16 @@ export function DocumentsPanel({
   documents,
   canUpload,
   renderedAt,
+  direction,
+  elsewhere,
 }: {
   documents: KbDocumentRow[];
   canUpload: boolean;
   renderedAt: string;
+  /** Which side of the panel this is: the list is what those calls can reach. */
+  direction: "inbound" | "outbound";
+  /** Documents kept for the other kind of call, counted but not listed. */
+  elsewhere: number;
 }) {
   const t = useTranslations("knowledge");
   const languages = useTranslations("languages");
@@ -49,6 +59,13 @@ export function DocumentsPanel({
     startTransition(async () => {
       setError(null);
       const result = await setDocumentPublished(doc.id, !doc.isPublished);
+      if (!result.ok) setError(result.message);
+    });
+
+  const rescope = (doc: KbDocumentRow, scope: KnowledgeScope) =>
+    startTransition(async () => {
+      setError(null);
+      const result = await setDocumentScope(doc.id, scope);
       if (!result.ok) setError(result.message);
     });
 
@@ -79,6 +96,7 @@ export function DocumentsPanel({
           <span className="font-semibold">{t("documentsTitle")}</span>{" "}
           <span className="text-body text-muted">
             · {t("liveCount", { count: live })} · {t("pieces", { count: formatCount(pieces) })}
+            {elsewhere > 0 ? ` · ${t(`elsewhere.${direction}`, { count: elsewhere })}` : ""}
           </span>
         </div>
         {canUpload ? (
@@ -105,6 +123,7 @@ export function DocumentsPanel({
               <Th>{t("columns.size")}</Th>
               <Th align="right">{t("columns.pieces")}</Th>
               <Th>{t("columns.status")}</Th>
+              <Th>{t("columns.usedOn")}</Th>
               <Th>{t("columns.updated")}</Th>
               <Th />
             </tr>
@@ -130,6 +149,7 @@ export function DocumentsPanel({
                   canUpload={canUpload}
                   pending={pending}
                   onSwitch={() => toggle(doc)}
+                  onRescope={(scope) => rescope(doc, scope)}
                   onDelete={() => setDeletingId(doc.id)}
                 />
               );
@@ -165,6 +185,7 @@ function DocumentRows({
   canUpload,
   pending,
   onSwitch,
+  onRescope,
   onDelete,
 }: {
   doc: KbDocumentRow;
@@ -176,6 +197,7 @@ function DocumentRows({
   canUpload: boolean;
   pending: boolean;
   onSwitch: () => void;
+  onRescope: (scope: KnowledgeScope) => void;
   onDelete: () => void;
 }) {
   const t = useTranslations("knowledge");
@@ -209,6 +231,9 @@ function DocumentRows({
           </Chip>
         </Td>
         <Td>
+          <span className="text-muted">{t(`scopes.${doc.scope}`)}</span>
+        </Td>
+        <Td>
           <span className="text-muted">{updatedLabel}</span>
         </Td>
         <Td align="right">
@@ -231,7 +256,7 @@ function DocumentRows({
       </tr>
       {open ? (
         <tr className="bg-paper">
-          <Td colSpan={7} className="py-4">
+          <Td colSpan={8} className="py-4">
             <div className="flex items-start justify-between gap-6 px-1">
               <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-body">
                 <dt className="text-muted">{t("detail.source")}</dt>
@@ -250,13 +275,28 @@ function DocumentRows({
                 ) : null}
               </dl>
               {canUpload ? (
-                <div className="flex shrink-0 gap-2">
-                  <Button icon="power" disabled={pending} onClick={onSwitch}>
-                    {doc.isPublished ? t("switchOff") : t("switchOn")}
-                  </Button>
-                  <Button variant="danger" icon="trash" disabled={pending} onClick={onDelete}>
-                    {t("delete")}
-                  </Button>
+                <div className="flex shrink-0 flex-col items-end gap-2.5">
+                  <label className="flex items-center gap-2 text-body text-muted">
+                    {t("usedOn")}
+                    <select
+                      value={doc.scope}
+                      disabled={pending}
+                      onChange={(event) => onRescope(event.target.value as KnowledgeScope)}
+                      className="rounded-btn border border-line bg-surface px-2 py-1 text-body text-ink"
+                    >
+                      <option value="both">{t("scopes.both")}</option>
+                      <option value="inbound">{t("scopes.inbound")}</option>
+                      <option value="outbound">{t("scopes.outbound")}</option>
+                    </select>
+                  </label>
+                  <div className="flex gap-2">
+                    <Button icon="power" disabled={pending} onClick={onSwitch}>
+                      {doc.isPublished ? t("switchOff") : t("switchOn")}
+                    </Button>
+                    <Button variant="danger" icon="trash" disabled={pending} onClick={onDelete}>
+                      {t("delete")}
+                    </Button>
+                  </div>
                 </div>
               ) : null}
             </div>

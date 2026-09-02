@@ -172,6 +172,7 @@ type Contact = {
 |---|---|---|
 | `GET /admin/campaigns` | centre_manager | → `CampaignSummary[]` newest first |
 | `POST /admin/campaigns` | ops_manager | `{name, flowId, numbers: string, maxConcurrent, consentAttested: true, consentNote?}` → `{campaign: CampaignSummary, imported, invalid: string[] (bad lines, never full numbers: first 3 + last 2 digits), removedBy: {check: string, count: number}[]}`. `numbers` is pasted text, one contact per line: `number` or `name, number`. `consentAttested` must be true (422 otherwise): the operator attests these farmers consented to promotional calls, and that attestation is audited. |
+| `POST /admin/campaigns/contacts/extract` | ops_manager | `multipart/form-data` with `file` (`.xlsx`, `.csv`, `.tsv`, `.txt`) → `{lines: string[], found, skipped, sheets}`. Reads the contact list out of the file and hands back `name, number` lines for the operator to check; nothing is created. `.xls` is refused with instructions to save as `.xlsx`. |
 | `GET /admin/campaigns/{id}` | centre_manager | → `CampaignSummary & {contacts: Contact[]}` |
 | `PATCH /admin/campaigns/{id}` | ops_manager | `{maxConcurrent?, name?}` → `CampaignSummary` |
 | `POST /admin/campaigns/{id}/approve` | ops_manager | → `CampaignSummary`. 403 with code `four_eyes` when the caller created it, unless the caller is super_admin. |
@@ -238,10 +239,10 @@ type KbDocumentRow = {
 | Route | Needs | Body → Result |
 |---|---|---|
 | `GET /admin/knowledge/documents` | agronomist | → `KbDocumentRow[]` |
-| `POST /admin/knowledge/documents` | ops_manager | `multipart/form-data` with `file` (+ optional `title`, `language`) **or** JSON `{url, title?, maxPages?}` → `KbDocumentRow` with `ingestStatus: "pending"`. Extraction, chunking and embedding run in the background; poll the list. A document is published automatically when indexing succeeds. |
-| `PATCH /admin/knowledge/documents/{id}` | ops_manager | `{isPublished}` → `KbDocumentRow` ("switch off" = unpublish) |
+| `POST /admin/knowledge/documents` | ops_manager | `multipart/form-data` with `file` (+ optional `title`, `language`, `scope`) **or** JSON `{url, title?, maxPages?, scope?}` → `KbDocumentRow` with `ingestStatus: "pending"`. `scope` is `"inbound" | "outbound" | "both"` and defaults to `both`. Extraction, chunking and embedding run in the background; poll the list. A document is published automatically when indexing succeeds. |
+| `PATCH /admin/knowledge/documents/{id}` | ops_manager | `{isPublished?, scope?}` → `KbDocumentRow` ("switch off" = unpublish; `scope` moves it between the helpline, campaign calls and both). At least one field is required. |
 | `DELETE /admin/knowledge/documents/{id}` | ops_manager | 204 |
-| `POST /admin/knowledge/ask` | agronomist | `{question, answer?: boolean}` → `{passages: {documentTitle, section: string | null, snippet, score}[], retrievalMs, degraded: boolean, answer: null \| {text, totalMs, note: string | null}}`. `answer: true` runs the same agent the phone uses (a model call). |
+| `POST /admin/knowledge/ask` | agronomist | `{question, answer?: boolean, direction?: "inbound" | "outbound"}` (default `inbound`; the direction decides which documents are reachable) → `{passages: {documentTitle, section: string | null, snippet, score}[], retrievalMs, degraded: boolean, answer: null \| {text, totalMs, note: string | null}}`. `answer: true` runs the same agent the phone uses (a model call). |
 
 ---
 
@@ -281,8 +282,9 @@ type TransferRules = {
 
 | Route | Needs | Result |
 |---|---|---|
-| `GET /admin/data/storage` | ops_manager | `{countedAt, tables: {label, table, rows, bytes, note, indexedBy, partitioned: boolean}[], recordings: {bucket, region, retentionDays}, backups: {schedule, lastAt: string \| null, lastBytes: number \| null}}` |
-| `GET /admin/data/connection` | super_admin | `{host, port, database, user, tls: boolean, poolSize, poolBusy, latencyMs, serverVersion, rowLevelSecurity: true, redis: {ok, latencyMs}, storage: {ok, endpoint}}` — never the password |
+| `GET /admin/data/storage` | ops_manager | Measured at most once a minute and served from that measurement in between; `countedAt` says when. `{countedAt, tables: {label, table, rows, bytes, note, indexedBy, partitioned: boolean}[], recordings: {bucket, region, retentionDays}, backups: {schedule, lastAt: string \| null, lastBytes: number \| null}}` |
+| `GET /admin/data/connection` | super_admin | `{host, port, database, user, tls: boolean, poolSize, poolBusy, latencyMs, serverVersion, rowLevelSecurity: true}` — never the password. Answers in a millisecond: the service probes moved to `/admin/data/health` so a store that is down cannot hold the page. |
+| `GET /admin/data/health` | ops_manager | `{redis: {ok, latencyMs}, storage: {ok, latencyMs, endpoint}}` — both probed at once, each given two seconds before it is reported as not answering. Fetch it beside the page rather than before it. |
 | `POST /admin/data/connection/test` | super_admin | `{dsn}` → `{ok, latencyMs, serverVersion, error: string \| null}`. Tests only; the running connection changes through the deployment's environment (`DATABASE_URL`) and a restart, and the response says so. The DSN is not stored or logged. |
 
 ---

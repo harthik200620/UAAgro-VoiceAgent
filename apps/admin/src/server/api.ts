@@ -11,6 +11,7 @@ import type {
   CentreInput,
   CentrePatch,
   CentreRow,
+  ExtractedContacts,
   ConnectionInfo,
   ConnectionTest,
   FlowDetail,
@@ -20,7 +21,9 @@ import type {
   FlowVersion,
   KbDocumentRow,
   KnowledgeAnswer,
+  KnowledgeScope,
   LiveSnapshot,
+  ServiceHealthReport,
   StockRow,
   StorageReport,
   TransferRules,
@@ -196,6 +199,19 @@ export const getCampaigns = (session: Session) =>
 export const getCampaign = (session: Session, campaignId: string) =>
   apiFetch<CampaignDetail>(`/admin/campaigns/${id(campaignId)}`, { session });
 
+/**
+ * A spreadsheet or CSV turned into contact lines, read by the control plane.
+ *
+ * Nothing is created: the lines come back for the operator to look at in the
+ * same box they would have pasted into.
+ */
+export const readContactFile = (session: Session, form: FormData) =>
+  apiFetch<ExtractedContacts>("/admin/campaigns/contacts/extract", {
+    session,
+    method: "POST",
+    body: form,
+  });
+
 export const createCampaign = (session: Session, input: CampaignInput, key: string) =>
   apiFetch<CampaignImport>("/admin/campaigns", {
     session,
@@ -303,7 +319,7 @@ export const uploadKbDocument = (session: Session, form: FormData, key: string) 
 
 export const addKbUrl = (
   session: Session,
-  body: { url: string; title?: string; maxPages?: number },
+  body: { url: string; title?: string; maxPages?: number; scope?: KnowledgeScope },
   key: string,
 ) =>
   apiFetch<KbDocumentRow>("/admin/knowledge/documents", {
@@ -313,11 +329,16 @@ export const addKbUrl = (
     idempotencyKey: key,
   });
 
-export const setKbPublished = (session: Session, documentId: string, isPublished: boolean) =>
+/** Whether it is live, which calls may use it, or both. */
+export const patchKbDocument = (
+  session: Session,
+  documentId: string,
+  change: { isPublished?: boolean; scope?: KnowledgeScope },
+) =>
   apiFetch<KbDocumentRow>(`/admin/knowledge/documents/${id(documentId)}`, {
     session,
     method: "PATCH",
-    body: { isPublished },
+    body: change,
   });
 
 export const deleteKbDocument = (session: Session, documentId: string) =>
@@ -327,11 +348,18 @@ export const deleteKbDocument = (session: Session, documentId: string) =>
   });
 
 /** `answer: true` runs the same agent the phone uses -- a model call. */
-export const askKnowledge = (session: Session, question: string, answer: boolean) =>
+export const askKnowledge = (
+  session: Session,
+  question: string,
+  answer: boolean,
+  direction: "inbound" | "outbound",
+) =>
   apiFetch<KnowledgeAnswer>("/admin/knowledge/ask", {
     session,
     method: "POST",
-    body: { question, answer },
+    // The direction decides which documents are reachable, so the operator is
+    // shown what that kind of call would actually find.
+    body: { question, answer, direction },
   });
 
 /* Inbound: centres, stock, hand-over */
@@ -387,6 +415,10 @@ export const getStorage = (session: Session) =>
 /** Never carries the password. */
 export const getConnection = (session: Session) =>
   apiFetch<ConnectionInfo>("/admin/data/connection", { session });
+
+/** Probed on its own so a store that is down cannot hold the page. */
+export const getServiceHealth = (session: Session) =>
+  apiFetch<ServiceHealthReport>("/admin/data/health", { session });
 
 /** Tests only; the DSN is stored and logged by nobody. */
 export const testConnection = (session: Session, dsn: string) =>

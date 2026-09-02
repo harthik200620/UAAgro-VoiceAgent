@@ -6,13 +6,19 @@ import { getLocale, getTranslations } from "next-intl/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-import type { CampaignControl, CampaignImport, CampaignSummary } from "@/lib/contract";
+import type {
+  CampaignControl,
+  CampaignImport,
+  CampaignSummary,
+  ExtractedContacts,
+} from "@/lib/contract";
 import { can } from "@/lib/rbac";
 import {
   approveCampaign,
   createCampaign,
   failure,
   pauseCampaign,
+  readContactFile,
   resumeCampaign,
   startCampaign,
   stopCampaign,
@@ -143,5 +149,32 @@ export async function setCampaignConcurrency(
     return { ok: true, value: campaign };
   } catch (error) {
     return failure(error, t("campaignFailed"));
+  }
+}
+
+/**
+ * Read a contact list out of a spreadsheet or CSV.
+ *
+ * The file goes to the control plane, which parses it in Python -- the same
+ * language, and nearly the same judgement about "which cell is the phone
+ * number", as the parser that validates the pasted list. The lines come back
+ * for the operator to check; nothing is created here.
+ */
+export async function readContacts(formData: FormData): Promise<ActionResult<ExtractedContacts>> {
+  const t = await getTranslations("actions");
+  const session = await currentSession();
+  if (!session || !can(session, "campaigns.create")) {
+    return { ok: false, message: t("forbidden"), code: "forbidden" };
+  }
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, message: t("nothingToAdd"), code: "validation_error" };
+  }
+  const body = new FormData();
+  body.set("file", file, file.name);
+  try {
+    return { ok: true, value: await readContactFile(session, body) };
+  } catch (error) {
+    return failure(error, t("uploadFailed"));
   }
 }

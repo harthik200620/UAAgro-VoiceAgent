@@ -220,6 +220,16 @@ export type CampaignDetail = CampaignSummary & { contacts: Contact[] };
 /** The five POST routes that drive a campaign, named as the API names them. */
 export type CampaignControl = "approve" | "start" | "pause" | "resume" | "stop";
 
+/** What a contact file offered up, before a campaign exists. */
+export type ExtractedContacts = {
+  /** `name, number` or a bare number, in file order. */
+  lines: string[];
+  found: number;
+  /** Rows with no number in them: headers, blanks, totals. */
+  skipped: number;
+  sheets: number;
+};
+
 export type CampaignImport = {
   campaign: CampaignSummary;
   imported: number;
@@ -306,8 +316,13 @@ export type KbDocumentRow = {
   ingestStatus: IngestStatus;
   ingestError: string | null;
   isPublished: boolean;
+  /** Which calls may quote it. Retrieval enforces this, not just the panel. */
+  scope: KnowledgeScope;
   updatedAt: string;
 };
+
+/** "both" is the default: crop and product material belongs on either call. */
+export type KnowledgeScope = "inbound" | "outbound" | "both";
 
 export type KnowledgeAnswer = {
   passages: { documentTitle: string; section: string | null; snippet: string; score: number }[];
@@ -404,8 +419,18 @@ export type ConnectionInfo = {
   latencyMs: number;
   serverVersion: string;
   rowLevelSecurity: true;
-  redis: { ok: boolean; latencyMs: number };
-  storage: { ok: boolean; endpoint: string };
+};
+
+/**
+ * Redis and the recordings store, probed on their own.
+ *
+ * Separate from the connection because a service that is down answers by
+ * timing out: the Data page renders without waiting for this and fills the
+ * row in when it arrives.
+ */
+export type ServiceHealthReport = {
+  redis: { ok: boolean; latencyMs: number | null };
+  storage: { ok: boolean; latencyMs: number | null; endpoint: string | null };
 };
 
 export type ConnectionTest = {

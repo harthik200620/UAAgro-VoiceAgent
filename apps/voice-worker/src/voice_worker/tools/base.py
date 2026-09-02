@@ -58,6 +58,10 @@ class ToolContext:
     farmer_id: str | None = None
     centre_id: str | None = None
     organization_id: str | None = None
+    #: ``inbound`` or ``outbound``. Retrieval uses it to leave out documents
+    #: marked for the other kind of call (§9); tools that do not care ignore
+    #: it. ``None`` means "not on a call" -- the panel's test question.
+    direction: str | None = None
 
 
 #: Result fields the loop needs but neither the model nor the call record

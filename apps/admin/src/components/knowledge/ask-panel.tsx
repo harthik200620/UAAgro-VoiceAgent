@@ -14,8 +14,11 @@ import { formatMs } from "@/lib/format";
  * "Try a question": what the agent would find, and -- on the second button
  * only, because it is a model call -- what it would say. The retrieval
  * numbers are shown because they are the number the phone farmer waits for.
+ *
+ * Asked as one kind of call or the other, because a document can be marked
+ * for one of them: the operator is shown what *that* call would find.
  */
-export function AskPanel() {
+export function AskPanel({ direction }: { direction: "inbound" | "outbound" }) {
   const t = useTranslations("knowledge.ask");
   const [question, setQuestion] = useState("");
   const [result, setResult] = useState<KnowledgeAnswer | null>(null);
@@ -25,7 +28,7 @@ export function AskPanel() {
   const ask = (answer: boolean) =>
     startTransition(async () => {
       setError(null);
-      const outcome = await askQuestion(question, answer);
+      const outcome = await askQuestion(question, answer, direction);
       if (outcome.ok) setResult(outcome.value);
       else setError(outcome.message);
     });

@@ -27,6 +27,16 @@ const NAV_ITEMS: readonly NavItem[] = [
   { key: "data", href: "/data", anyOf: ["data.view"] },
 ];
 
+export type OutboundTab = "campaigns" | "knowledge";
+
+const OUTBOUND_TABS: readonly { key: OutboundTab; href: string; capability: Capability }[] = [
+  { key: "campaigns", href: "/outbound", capability: "campaigns.view" },
+  // The same knowledge base as the helpline's. An offer call answers
+  // questions when the farmer presses 2, and the documents it may quote are
+  // managed from the side of the panel where that call is set up.
+  { key: "knowledge", href: "/outbound/knowledge", capability: "knowledge.view" },
+];
+
 export type InboundTab = "knowledge" | "centres" | "greeting";
 
 const INBOUND_TABS: readonly { key: InboundTab; href: string; capability: Capability }[] = [
@@ -41,4 +51,8 @@ export function navItemsFor(session: Session | null): NavItem[] {
 
 export function inboundTabsFor(session: Session | null) {
   return INBOUND_TABS.filter((tab) => can(session, tab.capability));
+}
+
+export function outboundTabsFor(session: Session | null) {
+  return OUTBOUND_TABS.filter((tab) => can(session, tab.capability));
 }
