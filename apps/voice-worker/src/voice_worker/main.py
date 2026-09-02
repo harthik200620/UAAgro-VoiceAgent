@@ -373,6 +373,15 @@ async def telephony_twiml(request: Request) -> Response:
     return Response(content=document, media_type="application/xml")
 
 
+# --------------------------------------------------------------------------- #
+# TEMPORARY: the browser test page (delete with `devtools/` when telephony works)
+# --------------------------------------------------------------------------- #
+
+from .devtools.browser_call import register_browser_call  # noqa: E402
+
+register_browser_call(app)
+
+
 @app.get("/health/live")
 async def health_live() -> JSONResponse:
     return JSONResponse({"status": "ok"})
@@ -830,10 +839,17 @@ async def voice_stream(websocket: WebSocket) -> None:
     serializer = _build_serializer(settings.telephony_provider)
     persist = not websocket.query_params.get("no_persist")
     repository = SqlCallRepository() if persist else NullCallRepository()
+    # `calls.organization_id` is NOT NULL, so a persisted call needs this
+    # before its first row is written -- and the row is written from the start
+    # frame, before anything else references it (§11.1). Resolved here rather
+    # than inside the session because the session owns the transport and the
+    # call record, and knows nothing about which organisation is seeded.
+    organization_id = await _resolve_organization() if persist else None
     session = CallSession(
         transport=_WebSocketTransport(websocket),
         serializer=serializer,
         repository=repository,
+        organization_id=organization_id,
         # Provisional. The start frame decides for real (see runtime.direction).
         direction=CallDirection.INBOUND,
         greeting_pcm=_GREETING_PCM,
