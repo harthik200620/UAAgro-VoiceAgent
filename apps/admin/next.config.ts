@@ -22,6 +22,12 @@ const config = withNextIntl({
   // a full `node_modules`. Without this the Dockerfile's COPY finds nothing and
   // the image fails to build, so the two are a pair.
   output: "standalone",
+  // The dev server and `next build` write to the same directory by default,
+  // and a build started while the dev server is running leaves it serving a
+  // module table it did not write ("__webpack_modules__[moduleId] is not a
+  // function" on the next request). Separate directories, so the two never
+  // meet; the Dockerfile still copies `.next/standalone`.
+  distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
   experimental: {
     // Knowledge-base uploads (a 48-page PDF) go through a Server Action, and
     // the default 1 MB body limit would refuse them before the API saw them.

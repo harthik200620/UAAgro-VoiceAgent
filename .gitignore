@@ -27,6 +27,7 @@ build/
 # node / next
 node_modules/
 .next/
+.next-dev/
 out/
 .turbo/
 *.tsbuildinfo
