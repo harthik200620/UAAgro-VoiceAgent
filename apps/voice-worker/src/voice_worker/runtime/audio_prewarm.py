@@ -1,9 +1,8 @@
 """Pre-synthesise the phrases that are always the same (§16.1, §11.1, §9.3).
 
 Some of what the agent says is fixed text: the greeting that opens every call,
-the hold phrase while a tool runs, the fallback when generation fails, and --
-most importantly -- §16.1's poisoning script, which the spec requires be spoken
-"from a cached recording".
+the fallback when generation fails, and -- most importantly -- §16.1's
+poisoning script, which the spec requires be spoken "from a cached recording".
 
 Synthesising those on demand is wrong twice over.
 
@@ -26,7 +25,6 @@ import asyncio
 import structlog
 
 from ..adapters.tts.base import TtsConfig, TTSService
-from ..flow.agent import HOLD_SCRIPT_HI
 from ..flow.safety import SAFETY_SCRIPT_HI
 from ..text.speech import split_sentences, text_for_speech
 from .audio_cache import AudioCache
@@ -40,12 +38,18 @@ def fixed_phrases() -> tuple[str, ...]:
     Ordered by how badly a delay hurts: the safety script first, because §16.1
     is the one path in the system where a synthesiser round trip is a person
     waiting with a chemical in their eyes.
+
+    No hold phrase. There used to be one -- "एक क्षण रुकिए, मैं देख रहा हूँ" --
+    spoken whenever a turn ran past 750 ms, which through the configured model
+    endpoint was every turn. Farmers heard it as a tic. A slow turn is now
+    covered by speaking sooner (the first clause, speculatively) rather than
+    by announcing the delay.
     """
     # From the validator, which is where it is defined -- `flow.agent`
     # re-imports it but does not re-export it.
     from ..flow.validator import FALLBACK_SCRIPT_HI
 
-    return (SAFETY_SCRIPT_HI, HOLD_SCRIPT_HI, FALLBACK_SCRIPT_HI)
+    return (SAFETY_SCRIPT_HI, FALLBACK_SCRIPT_HI)
 
 
 async def prewarm(

@@ -75,16 +75,23 @@ def estimate_tokens(text: str) -> int:
     return estimate(text)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Turn:
     """One exchange, as the model sees it."""
 
     role: str  # user | assistant
     text: str
+    #: The farmer cut this reply short. Rendered with a marker so the model
+    #: knows the caller did not hear the rest, and answers what interrupted
+    #: it before finishing the thought -- if the thought is still wanted.
+    interrupted: bool = False
 
     def render(self) -> str:
-        speaker = "किसान" if self.role == "user" else "सहायक"
-        return f"{speaker}: {self.text}"
+        if self.role == "user":
+            return f"किसान: {self.text}"
+        if self.interrupted:
+            return f"सहायक (किसान ने बीच में टोका, आगे नहीं सुना): {self.text}"
+        return f"सहायक: {self.text}"
 
 
 @dataclass
@@ -173,6 +180,40 @@ class ConversationMemory:
     def add(self, role: str, text: str) -> None:
         self.turns.append(Turn(role=role, text=text))
         self._turns_since_summary += 1
+
+    def mark_last_interrupted(self, heard: str) -> None:
+        """§5.4 step 3: the model must believe it said only what was heard.
+
+        The last assistant turn is cut down to the prefix the farmer actually
+        got, and flagged. Without this the model references a price it never
+        reached, or repeats itself because it thinks it was interrupted
+        earlier than it was.
+        """
+        for turn in reversed(self.turns):
+            if turn.role == "assistant":
+                turn.text = heard.strip() or turn.text
+                turn.interrupted = True
+                return
+
+    def extend_last_assistant(self, text: str) -> None:
+        """The agent picked up where it was cut off: join the two halves."""
+        for turn in reversed(self.turns):
+            if turn.role == "assistant":
+                turn.text = f"{turn.text} {text}".strip()
+                turn.interrupted = False
+                return
+        self.add("assistant", text)
+
+    def drop_last_user(self) -> None:
+        """A turn the model was asked about and never answered.
+
+        A speculative generation (§5.2) is cancelled when the farmer carries
+        on speaking; its transcript was only part of what they said, and left
+        in the history it would read as a question the agent ignored.
+        """
+        if self.turns and self.turns[-1].role == "user":
+            self.turns.pop()
+            self._turns_since_summary = max(0, self._turns_since_summary - 1)
 
     @property
     def needs_summary(self) -> bool:

@@ -62,7 +62,10 @@ PERSONA = "आप यूए एग्रो के फ़ोन सहायक 
 class StubGateway:
     """Returns a fixed answer, or fails on demand."""
 
-    reply: str = "जी, मैं देख रहा हूँ।"
+    # A real sentence. "मैं देख रहा हूँ" is a filler the agent now drops
+    # before validation, and a stub that only ever said that would fail
+    # every scenario for the wrong reason.
+    reply: str = "इस बारे में पूरी जानकारी केंद्र पर मिल जाएगी।"
     fail: bool = False
 
     async def stream(self, **_: object) -> AsyncIterator[tuple[str, str]]:

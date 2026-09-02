@@ -45,6 +45,12 @@ MAX_RESULTS = 5
 WARMUP_TERM = "zzzzwarmup"
 WARMUP_SKU = "ZZZZ-WARMUP"
 
+#: Products resolved from one utterance. A farmer names one, sometimes two;
+#: a longer list is a recogniser misfire, and §6.2 gives tool results 200
+#: tokens.
+MAX_MENTIONS = 3
+
+
 class SearchProducts(Tool):
     """Find SKUs by spoken name, brand, ingredient or crop."""
 
@@ -91,20 +97,37 @@ class SearchProducts(Tool):
 
         # The ASR lexicon first: an exact spoken-form match is both faster and
         # more certain than full-text search over a misheard word (§5.5).
+        #
+        # The whole query first, then the products *mentioned in* it. The
+        # agent hands this tool the farmer's sentence -- "डीएपी का रेट क्या
+        # है?" -- and matching that string against product names found
+        # nothing, full-text search found nothing either, and the model was
+        # left to answer a price question with no price: it invented one, the
+        # validator rejected it, and the turn took seven seconds to say
+        # nothing useful. The lexicon already knows how to find a product
+        # name inside an utterance; this is where that gets used.
         if self._lexicon is not None:
             match = self._lexicon.match(query)
-            if match is not None and not match.ambiguous:
+            mentions = [match] if match is not None else self._lexicon.find_all(query)
+            ambiguous = [m for m in mentions if m.ambiguous]
+            resolved = [m for m in mentions if not m.ambiguous]
+            if resolved:
                 async with tool_session() as session:
-                    row = await _product_by_sku(session, match.sku)
-                    if row is not None:
-                        return {"matched_by": "lexicon", "products": [row]}
-            if match is not None and match.ambiguous:
+                    rows = []
+                    for mention in resolved[:MAX_MENTIONS]:
+                        row = await _product_by_sku(session, mention.sku)
+                        if row is not None and row not in rows:
+                            rows.append(row)
+                if rows:
+                    return {"matched_by": "lexicon", "products": rows}
+            if ambiguous:
                 # §5.5: two products answer to this word. Saying which is a
                 # guess, so the agent is told to ask instead.
+                first = ambiguous[0]
                 return {
                     "matched_by": "lexicon",
                     "ambiguous": True,
-                    "candidates": [match.sku, match.runner_up_sku],
+                    "candidates": [first.sku, first.runner_up_sku],
                     "products": [],
                 }
 

@@ -32,8 +32,9 @@ import structlog
 
 from uaagro_domain.enums import Intent, TransferReason
 
-from ..text.speech import SentenceBuffer
+from ..text.speech import FIRST_CLAUSE_WORDS, SentenceBuffer, split_sentences
 from ..tools.base import ToolContext, ToolRegistry, ToolResult
+from .address import AddressBudget, trim_address
 from .context import CallerContext, ContextBuilder, ConversationMemory, DynamicHint
 from .escalation import EscalationDecision, EscalationEngine, TransferRequest, TurnSignals
 from .intents import classify_by_rule, reconcile
@@ -50,10 +51,6 @@ from .validator import (
 
 log = structlog.get_logger(__name__)
 
-#: §11.4: the hold phrase spoken while a slow tool or model is retried. Cached,
-#: because the moment it is needed is the moment synthesis is least reliable.
-HOLD_PHRASE_KEY = "hold.one_moment.hi"
-HOLD_SCRIPT_HI = "जी, एक क्षण रुकिए, मैं देख रहा हूँ।"
 #: Spoken before an immediate hand-over when no transfer tool is wired.
 TRANSFER_PLACEHOLDER_HI = "जी, मैं आपको हमारे साथी से जोड़ रहा हूँ। एक क्षण रुकिए।"
 #: §12.3-6: what the caller hears when nobody can take the call right now.
@@ -141,10 +138,19 @@ class Agent:
     hint: DynamicHint | None = None
     flow: CallFlow = field(default_factory=CallFlow)
     tool_context: ToolContext = field(default_factory=lambda: ToolContext(call_id="unknown"))
+    #: How the farmer is addressed, in proportion: the name once (in the
+    #: greeting), "सर" a couple of times a call, no "जी," openers. Applied to
+    #: every sentence before it is validated, spoken or remembered.
+    address: AddressBudget = field(default_factory=AddressBudget)
+    #: The pipeline may continue an interrupted answer when what interrupted
+    #: it was only "हाँ". A scripted responder says no; this one says yes.
+    resumes_after_backchannel: bool = True
     #: The most recent finished turn. `respond` streams text and cannot return
     #: a result, so the escalation decision and validation outcome are left
     #: here for whatever needs them after the words have gone out.
     last_turn: TurnResult | None = field(default=None, repr=False)
+    #: A user turn has been added to memory and not yet answered.
+    _turn_open: bool = field(default=False, repr=False)
 
     async def handle(self, transcript: str, *, asr_confidence: float | None = None) -> TurnResult:
         """Run one turn end to end, answering only when the whole reply is in.
@@ -177,6 +183,7 @@ class Agent:
         material a generation needs.
         """
         self.memory.add("user", transcript)
+        self._turn_open = True
 
         safety = await self._check_safety(transcript)
         if safety.triggered:
@@ -249,6 +256,7 @@ class Agent:
             )
 
         self.memory.add("assistant", text)
+        self._turn_open = False
         resolved = validation.ok and bool(prepared.results) and not decision.escalate
         confident = prepared.asr_confidence is None or prepared.asr_confidence >= 0.55
         self.flow.record_turn(prepared.intent, confident=confident, resolved=resolved)
@@ -329,9 +337,12 @@ class Agent:
                 tool_results=trimmed,
                 intent=intent,
             )
-            text = await self._collect(built, max_tokens=_token_budget(is_dosage))
+            text, sir_used = self._trim_whole(
+                await self._collect(built, max_tokens=_token_budget(is_dosage))
+            )
             outcome = self.validator.validate(text, tool_results=trimmed, is_dosage=is_dosage)
             if outcome.ok:
+                self.address.sir_used = sir_used
                 return text, outcome, False
             feedback = "; ".join(str(v) for v in outcome.violations)
 
@@ -354,6 +365,34 @@ class Agent:
             log.warning("agent.generation_failed", error=type(exc).__name__)
             return ""
         return "".join(pieces).strip()
+
+    def _trim_whole(self, text: str) -> tuple[str, int]:
+        """Trim every sentence of a complete answer, without spending the "सर"
+        budget until the answer is accepted -- a rejected attempt must not use
+        up the allowance for the one that replaces it."""
+        scratch = AddressBudget(
+            name_forms=self.address.name_forms,
+            sir_allowed=self.address.sir_allowed,
+            sir_used=self.address.sir_used,
+        )
+        kept = [trim_address(s, scratch) for s in split_sentences(text)]
+        return " ".join(s for s in kept if s).strip(), scratch.sir_used
+
+    # -- what the pipeline tells the agent ----------------------------------- #
+
+    def note_interruption(self, heard: str) -> None:
+        """The farmer cut the last reply short; remember only what they heard."""
+        self.memory.mark_last_interrupted(heard)
+
+    def note_resumed(self, text: str) -> None:
+        """The rest of an interrupted reply was spoken after all."""
+        self.memory.extend_last_assistant(text)
+
+    def discard_pending(self) -> None:
+        """A speculative turn was withdrawn before it was answered."""
+        if self._turn_open:
+            self.memory.drop_last_user()
+            self._turn_open = False
 
     # -- terminal turns ------------------------------------------------------ #
 
@@ -515,7 +554,11 @@ class Agent:
         outcome = ValidationOutcome(ok=True)
 
         try:
-            async for sentence in self._generate_sentences(built):
+            async for raw in self._generate_sentences(built):
+                sentence = trim_address(raw, self.address)
+                if not sentence:
+                    # A filler sentence, or one that was only a vocative.
+                    continue
                 # Validated against everything said so far, not in isolation:
                 # §11.3's word cap is the one rule that is cumulative, and a
                 # per-sentence check would let five short sentences past it.
@@ -526,6 +569,14 @@ class Agent:
                     spoken.append(sentence)
                     yield sentence
                     continue
+
+                if spoken and set(outcome.rules) == {"length"}:
+                    # The answer ran long. What was said was true and short
+                    # enough; the rest is simply not spoken. Handing the caller
+                    # to a person over a word count would be absurd.
+                    log.info("agent.answer_capped", sentences=len(spoken))
+                    outcome = ValidationOutcome(ok=True)
+                    break
 
                 if not spoken:
                     # Nothing has reached the caller, so §16.3's retry is
@@ -557,9 +608,12 @@ class Agent:
             return
 
         if not spoken:
-            # The stream ended without producing a single usable sentence.
-            self._finish(prepared, FALLBACK_SCRIPT_HI, ValidationOutcome(ok=False), True)
-            yield FALLBACK_SCRIPT_HI
+            # The stream ended without a usable sentence -- every one of them
+            # was filler, or a vocative and nothing else. Nothing has been
+            # said, so the retry is still available, and the buffered path
+            # falls back and hands over only if that fails too.
+            async for whole in self._retry_whole(prepared):
+                yield whole
             return
 
         self._finish(prepared, " ".join(spoken), outcome, False)
@@ -570,7 +624,7 @@ class Agent:
         The trailing flush is here rather than at the call site so that the
         last sentence of an answer travels the same path as every other one.
         """
-        buffer = SentenceBuffer()
+        buffer = SentenceBuffer(first_clause_words=FIRST_CLAUSE_WORDS)
         async for piece, _rung in self.gateway.stream(
             system_blocks=built.system_blocks,
             user_message=built.user_message,
@@ -626,7 +680,7 @@ def _token_budget(is_dosage: bool) -> int:
     is missing.
     """
     words = MAX_WORDS_DOSAGE if is_dosage else MAX_WORDS
-    return int(words * TOKENS_PER_WORD_CEILING)
+    return max(120, int(words * TOKENS_PER_WORD_CEILING))
 
 
 #: Tokens per Hindi word, rounded up hard.
@@ -676,4 +730,4 @@ def _nothing_found(results: Sequence[ToolResult]) -> bool:
     return all(not r.ok or not r.data or r.data.get("answered") is False for r in results)
 
 
-__all__ = ("HOLD_PHRASE_KEY", "HOLD_SCRIPT_HI", "Agent", "IntentClassifier", "TurnResult")
+__all__ = ("Agent", "IntentClassifier", "TurnResult")

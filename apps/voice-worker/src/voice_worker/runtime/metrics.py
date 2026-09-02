@@ -75,11 +75,10 @@ class TurnMetrics:
     from_cache: bool = False
     speculative_hit: bool = False
     speculative_discarded: bool = False
-    #: True when the turn ran long enough that the agent said "one
-    #: moment" before answering. Tracked because it is the honest
-    #: measure of how often the §7 budget is missed by enough for the
-    #: caller to notice -- a p95 in a dashboard is not.
-    spoke_hold_phrase: bool = False
+    #: True when the turn was not generated at all: the farmer interrupted,
+    #: said something that was only a listener's "हाँ", and the agent picked
+    #: up the rest of what it had been saying.
+    resumed: bool = False
 
     def mark(self, field_name: str, at: float | None = None) -> None:
         setattr(self, field_name, at if at is not None else time.perf_counter())

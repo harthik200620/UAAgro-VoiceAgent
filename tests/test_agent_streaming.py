@@ -133,7 +133,9 @@ async def test_a_bad_opening_still_gets_its_retry() -> None:
     assert gateway.calls == 2, "the violation was not retried"
     joined = "".join(pieces)
     assert "तुम्हें" not in joined
-    assert "जी, आपको" in joined
+    # The retry's "जी," opener is trimmed and its "मैं देखता हूँ" dropped as
+    # filler; what survives is the question itself.
+    assert "आपको डीएपी चाहिए" in joined
 
 
 async def test_a_failure_after_speaking_stops_rather_than_contradicting() -> None:
@@ -171,7 +173,7 @@ async def test_stopping_early_escalates_rather_than_dead_ending() -> None:
 async def test_an_ungrounded_number_is_still_caught_sentence_by_sentence() -> None:
     """The grounding check is the whole point of §16.3 and must not be weakened
     by being run on smaller pieces."""
-    gateway = ScriptedGateway(["कीमत 1200 रुपये है।"], ["जी, मैं देखता हूँ।"])
+    gateway = ScriptedGateway(["कीमत 1200 रुपये है।"], ["कीमत केंद्र पर बताई जाएगी।"])
     agent = make_agent(gateway)
 
     pieces = await collect(agent, "रेट क्या है")

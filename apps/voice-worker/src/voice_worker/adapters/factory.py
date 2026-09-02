@@ -103,6 +103,7 @@ def build_stt(
         endpoint_sensitivity=soniox.sensitivity if soniox else 0.0,
         max_endpoint_delay_ms=soniox.max_endpoint_delay_ms if soniox else 2000,
         eager_after_final_ms=soniox.eager_after_final_ms if soniox else 160,
+        eager_after_stable_ms=soniox.eager_after_stable_ms if soniox else 300,
     )
 
     match route.stt.provider:

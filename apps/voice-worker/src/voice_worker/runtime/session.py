@@ -735,12 +735,25 @@ class CallSession:
         """Play the opening audio.
 
         §11.1 wants first audio out within ~50 ms of the start frame, which is
-        why the greeting is pre-rendered rather than synthesised on demand. In
-        Phase 1 it is a placeholder tone; Phase 2 swaps in the cached Sarvam
-        rendering of the §11.1 greeting without touching this call site.
+        why the greeting is pre-rendered rather than synthesised on demand.
+
+        Through the pipeline's own sender when there is one, so the greeting
+        is paced and interruptible like every other line: a farmer who talks
+        over it is heard, and the agent stops. Blasting the frames at the
+        transport -- the Phase 1 shape, kept for the protocol tests -- put
+        five seconds of audio in the provider's buffer that nothing could
+        recall.
         """
         pcm = self._greeting_pcm
         if pcm is None:
+            return
+        opening = getattr(self._pipeline, "play_opening", None)
+        if opening is not None and self._built is not None:
+            opening(
+                str(getattr(self._built, "opening_text", "") or ""),
+                pcm,
+                protect_disclosure=self._direction is CallDirection.OUTBOUND,
+            )
             return
         await self.send_audio(pcm)
 

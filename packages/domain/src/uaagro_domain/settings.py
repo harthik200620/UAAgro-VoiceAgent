@@ -113,6 +113,8 @@ class SonioxEndpointSettings(BaseModel):
     #: this is the substitute, and it is a heuristic rather than a vendor
     #: signal -- see the adapter.
     eager_after_final_ms: int
+    #: The same for provisional text that has stopped changing (§5.2).
+    eager_after_stable_ms: int = 500
 
 
 class SmartTurnSettings(BaseModel):
@@ -506,6 +508,9 @@ class Settings(BaseSettings):
     # Overridable because a container usually mounts them read-only from a
     # shared volume instead of baking a gigabyte into the image.
     smart_turn_model_path: Path = Path("models/smart-turn-v3.1.onnx")
+    #: Optional. Silero VAD weights for the barge-in voice gate; the spectral
+    #: rule serves when the file is absent (see runtime/vad.py).
+    silero_vad_model_path: Path = Path("models/silero_vad.onnx")
     e5_model_dir: Path = Path("models/multilingual-e5-base")
 
     # --- llm -------------------------------------------------------------- #

@@ -36,15 +36,18 @@ publishes a probability that the turn is over and lets us start generating at
 cost the ~300 ms overlap on the ~80% of turns that do commit, which is most of
 the margin in §7's 1,200 ms budget.
 
-What it publishes instead is *finality*: tokens flip from provisional to
-confirmed, and it stops revising. A stretch where every token is final and no
-new provisional text has arrived is the same evidence Flux turns into a
-probability. So the eager signal here is a short timer armed on that condition
-(:attr:`SttConfig.eager_after_final_ms`) -- a heuristic, stated as one, not a
-vendor signal wearing a vendor's name. It is safe because it is *only* a
-speculation trigger: when the caller carries on, the adapter emits
-``TURN_RESUMED`` and §5.2 requires the speculative generation be cancelled. A
-false eager costs tokens; it never speaks.
+What it publishes instead is *text that stops changing*. A stretch where
+no new word has arrived is the same evidence Flux turns into a probability,
+and it comes in two strengths: every token already final (Soniox finalises
+after a pause, so this is close to a real endpoint) and merely stable
+provisional text (a pause between words as often as between sentences). So
+the eager signal here is a timer armed when the text last changed --
+:attr:`SttConfig.eager_after_final_ms` in the first case, the longer
+:attr:`SttConfig.eager_after_stable_ms` in the second -- a heuristic,
+stated as one, not a vendor signal wearing a vendor's name. It is safe
+because it is *only* a speculation trigger: when the caller carries on, the
+adapter emits ``TURN_RESUMED`` and §5.2 requires the speculative generation
+be cancelled. A false eager costs tokens; it never speaks.
 """
 
 from __future__ import annotations
@@ -63,6 +66,7 @@ from uaagro_domain import fastjson
 from uaagro_domain.errors import VendorTimeoutError, VendorUnavailableError
 from uaagro_domain.settings import Settings
 
+from ...text.script import words as script_words
 from ..resilience import breaker_for
 from .base import SttConfig, SttEvent, SttEventType, STTService
 
@@ -120,13 +124,17 @@ class SonioxSTT(STTService):
         self._languages: Counter[str] = Counter()
         self._speech_started = False
         self._eager_sent = False
+        self._eager_text = ""
+        self._last_heard = ""
         self._eager_handle: asyncio.TimerHandle | None = None
         self._eager_delay_s = 0.16
+        self._eager_stable_delay_s = 0.3
 
     # -- lifecycle -------------------------------------------------------- #
 
     async def start(self, config: SttConfig) -> None:
         self._eager_delay_s = max(config.eager_after_final_ms, 0) / 1000
+        self._eager_stable_delay_s = max(config.eager_after_stable_ms, 0) / 1000
         # There is no degraded mode for "cannot hear the caller" -- a dead
         # recogniser fails the call either way (§11.4). What this buys is
         # failing in microseconds instead of after a 5 s connect timeout, so
@@ -393,11 +401,13 @@ class SonioxSTT(STTService):
             self._reset_turn()
             return events
 
-        if pending and self._eager_sent:
+        if self._eager_sent and script_words(heard) != script_words(self._eager_text):
             # §5.2: the caller carried on. Whatever was generated on the eager
             # signal must be cancelled -- an orphaned generation that still
             # speaks is a severe bug, so this is surfaced as its own event
-            # rather than folded into a transcript update.
+            # rather than folded into a transcript update. The comparison
+            # is on the words: a token flipping from provisional to final
+            # changes nothing the model was asked about.
             self._eager_sent = False
             events.append(SttEvent(type=SttEventType.TURN_RESUMED, text=heard, raw=payload))
 
@@ -411,12 +421,14 @@ class SonioxSTT(STTService):
                 )
             )
 
-        # Everything confirmed and nothing provisional outstanding: the
-        # recogniser has stopped revising. Arm the speculation timer.
-        if heard and not pending and not self._eager_sent:
-            self._arm_eager()
-        elif pending:
-            self._cancel_eager()
+        # The timer runs from the last time the words changed. Everything
+        # final is the stronger signal and gets the short delay; provisional
+        # text that has merely stopped growing gets the longer one, because
+        # a pause between words looks exactly like this for a moment.
+        changed = heard != self._last_heard or self._eager_handle is None
+        if heard and not self._eager_sent and changed:
+            self._arm_eager(self._eager_stable_delay_s if pending else self._eager_delay_s)
+        self._last_heard = heard
 
         return events
 
@@ -458,18 +470,20 @@ class SonioxSTT(STTService):
         self._languages.clear()
         self._speech_started = False
         self._eager_sent = False
+        self._eager_text = ""
+        self._last_heard = ""
         self._turn_started_at = None
 
     # -- the eager heuristic ---------------------------------------------- #
 
-    def _arm_eager(self) -> None:
+    def _arm_eager(self, delay_s: float) -> None:
         """Start the speculation timer, replacing any timer already running."""
         self._cancel_eager()
-        if self._eager_delay_s <= 0:
+        if delay_s <= 0:
             self._fire_eager()
             return
         loop = asyncio.get_running_loop()
-        self._eager_handle = loop.call_later(self._eager_delay_s, self._fire_eager)
+        self._eager_handle = loop.call_later(delay_s, self._fire_eager)
 
     def _cancel_eager(self) -> None:
         if self._eager_handle is not None:
@@ -490,12 +504,13 @@ class SonioxSTT(STTService):
         if not text:
             return
         self._eager_sent = True
+        self._eager_text = text
         self._emit(
             SttEvent(
                 type=SttEventType.EAGER_END_OF_TURN,
                 text=text,
                 confidence=self._mean_confidence(),
                 language=self._dominant_language(),
-                detail="stable_final",
+                detail="stable_final" if not self._pending_text else "stable_text",
             )
         )

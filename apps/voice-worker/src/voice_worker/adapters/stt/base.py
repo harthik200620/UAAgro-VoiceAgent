@@ -115,6 +115,9 @@ class SttConfig:
     #: How long every-token-final may persist before the pipeline generates
     #: speculatively. Soniox's stand-in for Flux's eager EOT (§5.2).
     eager_after_final_ms: int = 160
+    #: The same, for text that is still provisional but has stopped
+    #: changing. Longer, because a pause between two words looks like this.
+    eager_after_stable_ms: int = 500
     #: Set for callers flagged ``elderly_or_slow``. Rural callers pause
     #: mid-sentence far more than the model's training distribution expects,
     #: and cutting them off is the commonest way an Indian voice agent feels

@@ -692,7 +692,7 @@ async def _seed_agent_configs(
             FlowType.INBOUND,
             "Inbound helpline v1",
             seed_prompts.INBOUND_SYSTEM_PROMPT,
-            seed_prompts.INBOUND_GREETING_UNKNOWN,
+            seed_prompts.INBOUND_GREETING,
             seed_prompts.INBOUND_CLOSING,
             list(seed_prompts.INBOUND_TOOL_ALLOWLIST),
         ),

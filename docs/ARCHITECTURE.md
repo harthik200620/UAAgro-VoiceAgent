@@ -182,13 +182,18 @@ Two consequences worth naming.
 end-of-turn at 0.45 and lets generation start while the caller is still
 finishing; that overlap is roughly 300 ms on the ~80% of turns that commit,
 which is most of the margin in §7's 1,200 ms budget. Soniox has no equivalent.
-What it does publish is *finality* — tokens stop being revised — so the eager
-signal here is a short timer armed on "everything final, nothing provisional
-outstanding" (`eager_after_final_ms`, 160 ms). It is a heuristic and the code
-says so rather than dressing it as a vendor signal. It is safe because it only
-ever triggers speculation: when the caller carries on, the adapter emits
-`TURN_RESUMED`, §5.2 requires the speculative generation be cancelled, and a
-false eager costs tokens rather than reaching anyone's ear.
+What it does publish is *text that stops changing*, so the eager signal here
+is a timer armed when the words last changed: `eager_after_final_ms` (100 ms)
+once everything is final, `eager_after_stable_ms` (500 ms) while text is still
+provisional, because a pause between two words looks the same for a moment.
+It is a heuristic and the code says so rather than dressing it as a vendor
+signal. It is safe because it only ever triggers speculation: when the caller
+carries on, the adapter emits `TURN_RESUMED`, §5.2 requires the speculative
+generation be cancelled, and a false eager costs tokens rather than reaching
+anyone's ear. Measured 3 September against Soniox at endpoint level 3, it
+buys little: Soniox holds most of a short utterance's tokens until the
+endpoint itself, so there is rarely stable text to speculate on. The
+machinery stays because a longer utterance does produce it.
 
 **§5.2 asks for 8 s of patience for a slow speaker; the vendor accepts 3 s.**
 `max_endpoint_delay_ms` is clamped to the vendor's range rather than sent as
@@ -468,7 +473,7 @@ goes through it.
 | Admin (Phase 7) | Next.js 15 App Router, TS strict, English UI with content rendered in its own language, RBAC, sign-in with mandatory TOTP, fifteen of §15.1's sixteen screens, a source-level server-only boundary test |
 | Hardening (Phase 8) | OTel/Prometheus instruments with cardinality guards, 12 alert rules, 2 Grafana dashboards provisioned as code, the load harness, the runbook, Terraform, an automated restore rehearsal |
 | Assembly | `runtime/assembly.py` builds one call: published config, caller identity, §5.1 speech stack with §5.5 keyterms, tools, flow agent, turn loop |
-| Voice path | Sentence-level streaming from model to synthesiser to line, catalogue vocabulary boosting, a shared pre-warmed audio cache, and a hold phrase for turns that run long |
+| Voice path | Clause- and sentence-level streaming from model to synthesiser to line, a local voice gate for barge-in, resume-after-nod, catalogue vocabulary boosting, a shared pre-warmed audio cache |
 | Background worker | Post-call pipeline, campaign dialer, partition roll, retention, audit-chain verify, embedding backfill, all under the `system` RLS role |
 | Migrations added | 0002 orders, 0003 dual text-search config, 0004 section headings in the index, 0005 campaign compliance fields, 0006 system-role policies |
 | Tests | 867 Python collected (2 load tests deselected) plus 16 in the admin panel; 7 xfail/xpass are the §21 retrieval-gate misses and two boundary-unstable queries, each recorded with its reason; ruff, ruff-format, `mypy --strict` and `tsc --strict` clean |
@@ -594,14 +599,15 @@ The test that found it is `test_worker_startup.py`, which also closed a gap of
 its own: the `worker_url` fixture that boots the app with its real lifespan
 existed and no test had ever used it.
 
-**A slow turn was silent.** `HOLD_SCRIPT_HI` was defined, exported and never
-spoken. §7 budgets 700 ms for a turn, but a tool call and a generation can each
-run to their p95 and leave over a second of nothing -- and on a rural GSM line
-that is indistinguishable from a dropped call. The farmer says "हैलो? हैलो?", the
-recogniser hears speech, barge-in fires, and the answer that was half a second
-away is abandoned. The agent now says "one moment" after 750 ms, from cache,
-under a lock that guarantees it can never talk over the answer it is covering
-for.
+**The hold phrase is gone.** A version of this document argued for it: a slow
+turn is silence, silence on a GSM line reads as a dropped call, so say "one
+moment" after 750 ms. Through the configured model endpoint every turn is
+slower than 750 ms, so the agent said "एक क्षण रुकिए, मैं देख रहा हूँ" on every
+turn of the first live test, and the customer heard a tic, not reassurance.
+The wait is now shortened rather than announced -- see *Where the latency
+went, measured 3 September* -- and a farmer's "हैलो?" into the silence is
+handled by the same rule as any other nod: it does not cancel an answer that
+is about to arrive (`pipeline.nod_after_cut`).
 
 ### The panel opens in English; the data is never translated
 
@@ -790,6 +796,49 @@ audio pre-warm used to close the very connection it had just warmed.
 does not speak until the greeting has played, so the handshake now runs
 concurrently and is awaited just before the greeting is handed back — still
 raising at construction if it failed, rather than surfacing as a mute call.
+
+### Where the latency went, measured 3 September 2026
+
+The first live conversation through the browser page (thirteen turns, three
+minutes) put numbers on what the customer had described. Speech-end to first
+audio was **3.3-3.8 s** on every turn; the answers ran **6-11 s** each; the
+validator's 35-word cap rejected two of them, and each rejection was a second
+generation inside the caller's turn (one turn took 7.8 s); the agent greeted
+the caller by name on every reply and said "एक क्षण रुकिए, मैं देख रहा हूँ"
+before all of them; and `bargein.cut` never appeared in the log at all.
+
+That last one was structural. `_commit` awaited playback inside the
+recogniser's event loop, so while the agent was speaking nothing was reading
+the recogniser -- a speech-start sat in the queue until the answer finished.
+The answer is spoken in its own task now.
+
+| | 2 Sep (live) | 3 Sep (socket, synthesised speech) | how |
+|---|---|---|---|
+| Speech-end to first audio | 3.3-3.8 s | **2.15-2.3 s** in the pipeline, 2.4-2.7 s including Soniox's endpoint | first clause released to the synthesiser; no regenerations for length; the catalogue tool finds a product *inside* a question |
+| Answer length | 6-11 s | ~5 s | 26-word cap, prompt asks for 15-20; the streaming path stops at the cap instead of regenerating |
+| Barge-in | never fired | cut **0.2 ms** after the gate's onset, 200-330 ms after the voice starts | local voice gate on the audio, answer spoken in its own task |
+| A fan over the answer | -- | ignored | stationary-sound and periodicity tests in the gate |
+| "हाँ जी" over the answer | a new reply | silence, or the rest of the interrupted answer | `pipeline.nod_after_cut`, resume from the unheard sentence |
+| "एक क्षण रुकिए" | every turn | never | removed |
+| Name in replies | every reply | greeting only | `flow/address.py`, a rule rather than a request |
+
+**Where the remaining 2.2 s is.** Roughly 0.4 s before the model is asked
+(safety and intent rules, the catalogue lookup, context), **1.2-1.4 s to the
+model's first token**, 0.2 s for the first clause's tokens, 0.3-0.5 s to the
+synthesiser's first byte. The first-token figure is the endpoint's floor: a
+ten-token prompt against `api.mwapi.dev` takes 1.1-1.5 s to answer, prompt
+caching is not honoured there (`cache_read` is never reported), and the proxy
+lists only Claude models, so there is no faster one to choose on it. A direct
+Anthropic endpoint typically answers Haiku's first token in 0.3-0.5 s, which
+is the difference between this and the brief's one second. Nothing in this
+repository can close that gap; the switch is `LLM_BASE_URL` and a key.
+
+**What the browser page proved and what it cannot.** The hiss under every
+word was the page, not the voice: an 8 kHz buffer handed to a 48 kHz audio
+graph, which Chrome upsamples by linear interpolation. The context runs at
+8 kHz now and the browser does both conversions with real filters. The page
+still says nothing about a carrier leg, and `docs/VERIFICATION.md` still lists
+the real call.
 
 ### The timeout that turned "slow" into "broken"
 

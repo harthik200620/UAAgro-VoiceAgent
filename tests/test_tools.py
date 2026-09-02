@@ -204,6 +204,24 @@ async def test_a_spoken_product_name_resolves_through_the_lexicon(
     assert result.data["products"][0]["sku"] == "FRT-DAP-50"
 
 
+async def test_a_product_named_inside_a_question_still_resolves(
+    tools: ToolRegistry,
+) -> None:
+    """The agent hands the tool the farmer's whole sentence. Matching that
+    against product names found nothing, and a price question was answered
+    with no price -- so the lexicon looks *inside* the utterance."""
+    result = await tools.execute("search_products", {"query": "डीएपी का रेट क्या है?"}, CONTEXT)
+    assert result.ok
+    assert result.data["matched_by"] == "lexicon"
+    assert [p["sku"] for p in result.data["products"]] == ["FRT-DAP-50"]
+
+    both = await tools.execute(
+        "search_products", {"query": "यूरिया और डीएपी दोनों का रेट बताइए"}, CONTEXT
+    )
+    assert both.ok
+    assert {p["sku"] for p in both.data["products"]} == {"FRT-URE-45", "FRT-DAP-50"}
+
+
 async def test_an_ambiguous_word_returns_candidates_rather_than_a_choice(
     tools: ToolRegistry,
 ) -> None:

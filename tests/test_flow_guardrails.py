@@ -140,11 +140,12 @@ def test_the_informal_second_person_is_rejected(
     assert "register" in outcome.rules
 
 
-def test_sir_is_rejected_in_hindi(validator: OutputValidator) -> None:
-    """§11.3: never सर. It reads as a call-centre script, not a neighbour."""
+def test_sir_is_allowed_in_hindi(validator: OutputValidator) -> None:
+    """"सर" is a budget, not a ban -- the customer wants it a couple of times a
+    call, and rejecting it here cost a second generation per reply. The count
+    is enforced by ``flow.address``; the validator lets it through."""
     outcome = validator.validate("जी सर, बताइए")
-    assert not outcome.ok
-    assert "register" in outcome.rules
+    assert outcome.ok
 
 
 @pytest.mark.parametrize(

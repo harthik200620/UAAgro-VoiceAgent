@@ -314,16 +314,17 @@ async def test_a_caller_who_carries_on_cancels_the_speculation() -> None:
     )
 
 
-async def test_speculation_is_not_triggered_twice_for_one_turn() -> None:
+async def test_speculation_is_not_triggered_twice_for_the_same_words() -> None:
     """A second eager for the same words would start a second generation while
-    the first is still running, and §8 would bill for both."""
-    async with FakeSoniox([[token("रेट", confidence=0.9)]]) as server:
+    the first is still running, and §8 would bill for both. Tokens flipping
+    from provisional to final are the same words."""
+    async with FakeSoniox([[token("रेट", final=False)]]) as server:
         stt = SonioxSTT(Settings(), url=server.url)
-        await stt.start(config_for(eager_after_final_ms=20))
+        await stt.start(config_for(eager_after_final_ms=20, eager_after_stable_ms=20))
         try:
             await collect(stt, 3)
-            # More final text, no provisional tail: the arming condition again.
-            await server.push([token(" बताइए", confidence=0.9)])
+            # The same word, now final: nothing the model was asked has changed.
+            await server.push([token("रेट", confidence=0.9)])
             await asyncio.sleep(0.15)
             drained: list[SttEvent] = []
             with contextlib.suppress(TimeoutError):
@@ -332,6 +333,29 @@ async def test_speculation_is_not_triggered_twice_for_one_turn() -> None:
             await stt.close()
 
     assert [e for e in drained if e.type is SttEventType.EAGER_END_OF_TURN] == []
+    assert [e for e in drained if e.type is SttEventType.TURN_RESUMED] == []
+
+
+async def test_more_words_after_an_eager_cancel_it_and_speculate_again() -> None:
+    """The first speculation was for "रेट"; the caller went on to say "रेट
+    बताइए". Left alone, the commit would mismatch and the model would be
+    asked from scratch. Instead the stale generation is cancelled (§5.2) and
+    a new one starts on the fuller text -- one live generation at a time."""
+    async with FakeSoniox([[token("रेट", confidence=0.9)]]) as server:
+        stt = SonioxSTT(Settings(), url=server.url)
+        await stt.start(config_for(eager_after_final_ms=20))
+        try:
+            await collect(stt, 3)
+            await server.push([token(" बताइए", confidence=0.9)])
+            later = await collect(stt, 3)
+        finally:
+            await stt.close()
+
+    kinds = [e.type for e in later]
+    assert SttEventType.TURN_RESUMED in kinds
+    eager = [e for e in later if e.type is SttEventType.EAGER_END_OF_TURN]
+    assert eager and eager[-1].text == "रेट बताइए"
+    assert kinds.index(SttEventType.TURN_RESUMED) < kinds.index(SttEventType.EAGER_END_OF_TURN)
 
 
 async def _drain_into(stt: SonioxSTT, sink: list[SttEvent]) -> None:

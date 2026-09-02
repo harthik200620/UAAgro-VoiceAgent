@@ -37,10 +37,13 @@ from ..text.script import whole_word
 
 log = structlog.get_logger(__name__)
 
-#: §11.3. Normal answers cap at ~35 words; dosage instructions may run to ~60.
+#: §11.3. Normal answers cap at 26 words; dosage instructions may run to ~60.
 #: Words, not characters: Devanagari characters per word vary enormously and a
 #: character cap would clip Hindi far earlier than English for the same content.
-MAX_WORDS = 35
+#: The prompt asks for fifteen to twenty; twenty-six -- two short sentences --
+#: is where the validator steps in. On the streaming path that is a quiet
+#: stop at the sentence boundary, never a regeneration.
+MAX_WORDS = 26
 MAX_WORDS_DOSAGE = 60
 
 #: §16.3: reject and regenerate once. Two failures end in a cached phrase.
@@ -58,9 +61,6 @@ FALLBACK_SCRIPT_HI = (
 #: service call is not casual, it is rude, and in central UP it lands as
 #: talking down to the caller.
 _TUM = re.compile(whole_word("तुम|तुमने|तुम्हें|तुम्हारा|तुम्हारी|तुमको|तेरा|तेरी|तुझे"))
-
-#: §11.3: never सर. It reads as a call-centre script rather than a neighbour.
-_SIR = re.compile(whole_word("सर|साहब जी"), re.IGNORECASE)
 
 #: §16.2 and §11.3: no yield, profit or guarantee claims. A promise of doubled
 #: output is both unprovable and, from a seller, close to mis-selling.
@@ -179,8 +179,10 @@ class OutputValidator:
 
         if _TUM.search(stripped):
             violations.append(Violation("register", "uses तुम; §11.3 requires आप"))
-        if _SIR.search(stripped):
-            violations.append(Violation("register", "uses सर; §11.3 forbids it in Hindi"))
+        # "सर" is not rejected here. It used to be, and every reply that said
+        # it cost a second generation inside the caller's turn. The customer
+        # wants it -- once or twice a call, the way a shopkeeper says it --
+        # and that is a budget, not a ban: `flow.address` enforces the count.
 
         cap = self.max_words_dosage if is_dosage else self.max_words
         words = len(stripped.split())

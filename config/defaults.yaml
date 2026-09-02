@@ -159,7 +159,7 @@ turn_detection:
     # biases the decode toward the catalogue and §16.3 refuses an answer built
     # on a number no tool produced. §19.2 measures whether that holds.
     latency_adjustment_level: 3
-    sensitivity: 0.2              # -1.0..1.0; slightly biased toward ending the turn
+    sensitivity: 0.3              # -1.0..1.0; biased toward ending the turn
     # Deliberately NOT lowered alongside the level above. This is the pure
     # timeout backstop for when the semantic model does not fire, and §5.2 is
     # emphatic that cutting off a farmer who paused to think is the worst
@@ -170,7 +170,11 @@ turn_detection:
     # substitute: how long every-token-final may persist before the pipeline
     # starts generating speculatively. Short, because a false eager costs only
     # tokens -- TURN_RESUMED cancels it and it never reaches the caller.
-    eager_after_final_ms: 120
+    eager_after_final_ms: 100
+    # The same for provisional text that has stopped changing. Longer, because
+    # a pause between two words looks exactly like this for a moment; a false
+    # eager costs a cancelled generation, never a spoken word.
+    eager_after_stable_ms: 500
   flux:
     eager_eot_threshold: 0.45     # begin speculative LLM generation
     eot_threshold: 0.75           # commit the turn
@@ -198,7 +202,7 @@ turn_detection:
 # -----------------------------------------------------------------------------
 tts:
   pace: 0.97                      # §5.3: slightly slower than default, never faster
-  max_answer_words: 35            # §8: every extra word is billed twice
+  max_answer_words: 26            # §8: every extra word is billed twice; the prompt asks for 15-20
   max_dosage_answer_words: 60
   sentence_chunking: true         # chunk on sentence boundaries so barge-in cuts cleanly
   cache:
@@ -265,8 +269,10 @@ llm:
   # turn in four within 120 ms of the cutoff -- a cutoff that does not degrade
   # gracefully, because crossing it abandons a working generation for a
   # fallback model that is slower still. Sized against the worst observed
-  # turn, not the median. The caller is not left in silence meanwhile: §11.4's
-  # hold phrase covers from 750 ms.
+  # turn, not the median. There is no hold phrase to cover the wait any more --
+  # it fired on every turn and farmers heard it as a tic -- so the wait is
+  # shortened instead: speculative generation on the eager end-of-turn, the
+  # first clause released to the synthesiser, and its audio pre-rendered.
   first_token_timeout_ms: 3500
   total_timeout_ms: 8000
   max_tool_calls_per_turn: 2

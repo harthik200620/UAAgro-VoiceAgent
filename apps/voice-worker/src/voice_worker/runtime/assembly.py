@@ -57,6 +57,7 @@ from uaagro_domain.settings import Defaults, Settings
 
 from ..adapters.factory import SpeechStack, build_speech_stack
 from ..adapters.llm.gateway import LlmGateway, build_gateway
+from ..flow.address import AddressBudget, name_forms
 from ..flow.agent import Agent
 from ..flow.context import CallerContext, ContextBuilder, DynamicHint
 from ..flow.escalation import EscalationEngine
@@ -67,6 +68,7 @@ from ..outbound.script import OutboundScript
 from ..pipelines.conversation import ConversationPipeline
 from ..runtime.audio_cache import AudioCache
 from ..runtime.playback import BargeInPolicy, PacedSender
+from ..runtime.vad import build_voice_gate
 from ..text.lexicon import Lexicon
 from ..text.speech import text_for_speech
 from ..tools.base import ToolContext, ToolRegistry
@@ -420,6 +422,9 @@ class CallPipeline:
     settings: AgentSettings
     caller: Caller
     greeting_pcm: bytes
+    #: The words of the greeting, for the transcript and for barge-in
+    #: accounting when the caller talks over it.
+    opening_text: str = ""
     link: CallLink = field(default_factory=CallLink)
     #: Outbound only: writes the contact's result when the call ends.
     finish: Callable[[Any, CallStatus, CallOutcome | None], Awaitable[None]] | None = None
@@ -552,6 +557,10 @@ async def build_call_pipeline(
         )
         responder = agent
         opening = render_greeting(agent_settings.greeting_template, caller)
+        # The model is told it has already greeted the caller by name. Left
+        # out, its first reply greeted them again -- and the name, once more,
+        # on every reply after that.
+        agent.memory.add("assistant", opening)
 
     sender = PacedSender(send_frame, realtime=realtime)
     pipeline = ConversationPipeline(
@@ -562,6 +571,9 @@ async def build_call_pipeline(
         cache=audio_cache,
         barge_in=BargeInPolicy(),
         clear_playback=clear_playback,
+        # Decides on the audio whether the caller is talking, so a fan or
+        # the agent's own echo cannot interrupt it and a person can.
+        voice_gate=build_voice_gate(),
     )
 
     greeting_pcm = await _greeting_audio(opening, stack, audio_cache)
@@ -593,6 +605,7 @@ async def build_call_pipeline(
         settings=agent_settings,
         caller=caller,
         greeting_pcm=greeting_pcm,
+        opening_text=opening,
         link=CallLink(
             farmer_id=caller.farmer_id,
             farmer_name=caller.name,
@@ -638,6 +651,7 @@ def build_agent(
         hint=DynamicHint(),
         flow=CallFlow(),
         tool_context=ToolContext(call_id=str(call_id), direction=direction),
+        address=AddressBudget(name_forms=name_forms(caller.name)),
     )
 
 

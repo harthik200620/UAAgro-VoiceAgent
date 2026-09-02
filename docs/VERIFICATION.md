@@ -56,9 +56,13 @@ Expect, in order:
    number, never the full number, within a second of ringing.
 3. Ask "लखनऊ में आपका सेंटर कहाँ है?" Expect the nearest centre with its
    address and hours, read from the Centres page, not invented.
-4. Interrupt the agent mid-sentence. Expect it to stop within a quarter of a
-   second and listen. This is the barge-in check and it is the one most
-   likely to need tuning on a real line.
+4. Interrupt the agent mid-sentence. Expect it to stop within about a third
+   of a second and listen. Say only "हाँ जी" over it: expect it to stop and
+   then carry on where it was, or stay quiet if it had finished -- never to
+   answer the nod. Let a fan or the road run: expect it not to stop. This is
+   the barge-in check; the voice gate's thresholds (`runtime/vad.py`) are the
+   thing to tune on a real line, and `bargein.source` in the worker log says
+   which signal cut the agent.
 5. Ask for the manager. Expect a hold line naming the centre and a transfer to
    the number on the Centres page; if that number does not answer, the
    fallback number from Centres → Transfer rules. If instead you hear the

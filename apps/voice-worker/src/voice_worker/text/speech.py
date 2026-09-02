@@ -120,6 +120,13 @@ _MULTISPACE = re.compile(r"\s{2,}")
 #: Sentence boundaries. Devanagari uses ``।`` (danda) as well as the Latin stop,
 #: and §5.3 chunks on these so barge-in cancels at a natural point.
 _SENTENCE_END = re.compile(r"(?<=[।?!.])\s+")
+#: Clause boundaries, for the first release only: a comma or a dash followed
+#: by more text. Kept on the released clause so the synthesiser pauses there.
+_CLAUSE_END = re.compile("[,،;]\\s+|\\s+[\u2014\u2013-]\\s+")
+#: How many words must precede a clause boundary before the opening clause
+#: is released on its own. Shared by the agent and the pipeline so the two
+#: buffers between the model and the synthesiser agree on the unit.
+FIRST_CLAUSE_WORDS = 4
 
 #: §5.3: one idea per sentence, under about fifteen words. Longer sentences are
 #: unrecoverable when the line drops a packet.
@@ -226,10 +233,17 @@ class SentenceBuffer:
     answer whose last sentence lacks punctuation is still spoken.
     """
 
-    __slots__ = ("_buffer",)
+    __slots__ = ("_buffer", "_first_clause_words", "_released")
 
-    def __init__(self) -> None:
+    def __init__(self, *, first_clause_words: int = 0) -> None:
         self._buffer = ""
+        #: When set, the *first* release of the stream may happen at a clause
+        #: boundary -- a comma or a dash -- once this many words precede it.
+        #: The opening clause is what the farmer waits for; a full sentence of
+        #: Hindi is another 300-500 ms of tokens behind the comma. Later
+        #: releases stay on sentence boundaries, where the prosody is right.
+        self._first_clause_words = first_clause_words
+        self._released = 0
 
     def add(self, fragment: str) -> list[str]:
         """Take a fragment; return whatever complete sentences it completed."""
@@ -244,7 +258,26 @@ class SentenceBuffer:
             self._buffer = self._buffer[match.end() :]
             if sentence:
                 released.append(sentence)
+
+        if not released and self._released == 0 and self._first_clause_words > 0:
+            clause = self._first_clause()
+            if clause:
+                released.append(clause)
+
+        self._released += len(released)
         return released
+
+    def _first_clause(self) -> str | None:
+        """The opening clause, if a boundary with enough words behind it exists."""
+        for match in _CLAUSE_END.finditer(self._buffer):
+            head = self._buffer[: match.end()].strip()
+            if len(head.split()) < self._first_clause_words:
+                # "जी हाँ," on its own is not worth a synthesiser round trip;
+                # the next boundary along may be.
+                continue
+            self._buffer = self._buffer[match.end() :]
+            return head
+        return None
 
     def flush(self) -> list[str]:
         """Release the tail, terminated or not."""
