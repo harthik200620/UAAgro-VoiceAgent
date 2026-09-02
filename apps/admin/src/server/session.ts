@@ -55,9 +55,6 @@ export async function currentSession(): Promise<Session | null> {
       role: payload.role,
       centreIds: payload.centre_ids ?? [],
       name: payload.full_name ?? "",
-      // From the URL (next-intl), not the user record. Only `en` is
-      // configured today; see i18n/routing.
-      locale: "en",
       accessToken: token,
     };
   } catch {

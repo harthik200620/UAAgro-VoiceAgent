@@ -23,9 +23,11 @@ second copy that could disagree.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from itertools import pairwise
+from typing import Any
 
 import structlog
 
@@ -57,8 +59,7 @@ DEFAULT_BULK_UNITS = 20
 #: for language directed at the listener.
 _ABUSE = re.compile(
     whole_word(
-        "गाली|बदतमीज़|बदतमीज|बकवास बंद|चुप कर|चूतिया|मादरचोद|भोसड़ी|"
-        "fuck|bastard|idiot|shut up|bloody"
+        "गाली|बदतमीज़|बदतमीज|बकवास बंद|चुप कर|चूतिया|मादरचोद|भोसड़ी|fuck|bastard|idiot|shut up|bloody"
     ),
     re.IGNORECASE,
 )
@@ -106,6 +107,38 @@ class EscalationDecision:
 
 
 NO_ESCALATION = EscalationDecision(escalate=False)
+
+
+@dataclass(frozen=True, slots=True)
+class TransferRequest:
+    """A hand-over the transfer tool prepared and the call loop must now make.
+
+    The tool decides *whether* and *to whom* (§12.3: the chain, the hours, the
+    daily cap); it cannot touch the phone line. This is what it hands back for
+    the session to act on once the caller has heard the transfer line.
+    """
+
+    to: str
+    target_name: str
+    target_kind: str
+    reason: str
+    whisper: str | None = None
+    say_first: str = ""
+
+    @classmethod
+    def from_tool_result(cls, data: Mapping[str, Any]) -> TransferRequest | None:
+        """The request inside a ``transfer_to_human`` result, or None for a fallback."""
+        if data.get("action") != "transfer" or not data.get("target_number"):
+            return None
+        whisper = data.get("whisper")
+        return cls(
+            to=str(data["target_number"]),
+            target_name=str(data.get("target_name") or ""),
+            target_kind=str(data.get("target_kind") or ""),
+            reason=str(data.get("reason") or ""),
+            whisper=str(whisper) if whisper else None,
+            say_first=str(data.get("say_first") or ""),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,9 +253,7 @@ class EscalationEngine:
 
     # -- §12.2 -------------------------------------------------------------- #
 
-    def _conditional(
-        self, signals: TurnSignals, *, repeated_intent: bool
-    ) -> EscalationDecision:
+    def _conditional(self, signals: TurnSignals, *, repeated_intent: bool) -> EscalationDecision:
         if signals.intent is Intent.DEALERSHIP_ENQUIRY:
             # §12.2: always. A franchise enquiry is a high-value sales lead and
             # the agent has nothing useful to say about terms.
@@ -350,9 +381,7 @@ class EscalationEngine:
         explain a repetition, and treating it as though it did would suppress a
         genuine misunderstanding trigger.
         """
-        return bool(self._confidences) and all(
-            c < LOW_CONFIDENCE_MEAN for c in self._confidences
-        )
+        return bool(self._confidences) and all(c < LOW_CONFIDENCE_MEAN for c in self._confidences)
 
     def _sentiment_is_falling(self) -> bool:
         """§12.2: declining across the window **and** below the floor.

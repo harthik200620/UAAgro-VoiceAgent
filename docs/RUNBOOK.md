@@ -315,3 +315,37 @@ Listed so nobody discovers them during an incident.
 - **Terraform has never been applied.** `infra/terraform` describes the
   intended `ap-south-1` footprint and has been validated but not planned
   against a real account.
+
+---
+
+## Panel operations
+
+**A campaign card stays amber.** The dialer marked the contact as being
+dialled and no call ever connected. `reconcile_contacts` runs every two minutes
+and turns it red with a retry scheduled; if cards stay amber for longer, the
+background worker is down (`arq worker.tasks.WorkerSettings`).
+
+**"Pause" or "Stop" seems ignored.** They write a Redis key the dialer reads
+before every dial (`campaign:<id>:control`); in-flight calls finish on
+purpose. If new dials continue for more than a minute, Redis is unreachable
+from the worker -- the dialer treats a control channel that is down as
+silence, by design, and the log line is `dialer.control_unreachable`.
+
+**A document is stuck on "indexing".** The worker died mid-job. Re-enqueue with
+`arq` or delete and re-upload; the row's `ingest_error` carries the last
+failure in the operator's terms. A scan with no text is reported, not retried.
+
+**"Try a question" answers 503.** The control plane could not reach the voice
+worker's internal endpoints: check `VOICE_WORKER_URL` and that
+`INTERNAL_API_TOKEN` is identical on both services.
+
+**The live page shows nothing while calls are in progress.** The media path
+publishes to Redis and the API subscribes; a Redis restart drops subscribers
+and the panel reconnects with backoff within seconds. If it stays empty, the
+API cannot reach Redis (`events.stream_ended` in its log).
+
+**An outbound call greets the farmer like an inbound caller.** The start frame
+was read as inbound: either the provider dropped the custom field *and* the
+call was placed from a number not in `OUTBOUND_CLI_PROMOTIONAL` /
+`OUTBOUND_CLI_TRANSACTIONAL`. The first real call is where the provider's
+frame shape is confirmed (`runtime/direction.py` records the assumption).

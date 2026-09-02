@@ -115,12 +115,19 @@ class TelephonyAdapter(ABC):
     provider: TelephonyProvider
 
     @abstractmethod
-    async def originate(self, *, to: str, from_: str, callback_url: str) -> str:
+    async def originate(
+        self, *, to: str, from_: str, callback_url: str, custom_field: str | None = None
+    ) -> str:
         """Place an outbound call. Returns the provider call SID.
 
         §17: the destination must come from an operator-approved campaign list
         or the ``centres``/``users`` tables. A caller-supplied value must never
         reach here -- that is how toll fraud happens.
+
+        ``custom_field`` rides along to the media stream's ``start`` frame,
+        where the worker reads it to find the campaign contact the call is
+        for. Providers that cannot carry it are still usable: the worker falls
+        back to matching the dialled number against contacts being dialled.
         """
 
     @abstractmethod

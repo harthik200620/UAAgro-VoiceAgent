@@ -1,0 +1,256 @@
+# Production stack on one host (§20).
+#
+#   docker compose --env-file .env -f infra/docker/docker-compose.prod.yml up -d
+#
+# What is different from the development stack next to this file:
+#
+# - Every credential comes from `.env` and nothing is defaulted here. A missing
+#   value fails the container that needs it, naming the variable (§0 rule 4).
+# - Nothing is published on a host port except Caddy, which terminates TLS and
+#   routes the panel and the telephony WebSocket by hostname. The API, the
+#   database, Redis and MinIO are reachable only on the compose network.
+# - No simulator, no LiteLLM, no seed. Migrations run; seeding is a one-off
+#   `docker compose ... run --rm migrate uaagro-db seed` on a fresh install.
+# - Images are pinned by digest where they come from a registry; the three
+#   services built from this repository share one image (see Dockerfile.python).
+#
+# Sizing for 30 concurrent calls: 4 vCPU / 8 GB for the voice worker (the
+# embedding model and the audio loop), 2 vCPU / 4 GB for everything else. For
+# 100 concurrent calls run two voice-worker replicas behind Caddy and move
+# Postgres and Redis to managed services (see infra/terraform).
+
+name: uaagro
+
+x-python-image: &python-image
+  build:
+    context: ../..
+    dockerfile: infra/docker/Dockerfile.python
+  image: uaagro/platform:${IMAGE_TAG:-latest}
+  restart: unless-stopped
+  env_file:
+    - path: ../../.env
+      required: true
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: uaagro
+      POSTGRES_USER: uaagro
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - max_connections=200
+      - -c
+      - log_min_duration_statement=250
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uaagro -d uaagro"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # Object storage for recordings and uploads. Replace with S3 by setting
+  # S3_ENDPOINT to the AWS endpoint in .env and removing this service.
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - >
+        mc alias set local http://minio:9000 "$S3_ACCESS_KEY_ID" "$S3_SECRET_ACCESS_KEY" &&
+        mc mb --ignore-existing "local/$S3_BUCKET"
+    env_file:
+      - path: ../../.env
+        required: true
+
+  migrate:
+    <<: *python-image
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["uaagro-db", "migrate"]
+
+  api:
+    <<: *python-image
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      VOICE_WORKER_URL: http://voice-worker:8080
+    expose:
+      - "8000"
+    command:
+      - uvicorn
+      - api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;urllib.request.urlopen('http://localhost:8000/health/live')
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  voice-worker:
+    <<: *python-image
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    expose:
+      - "8080"
+    # The embedding model (~1.1 GB) lives on a volume so a redeploy does not
+    # download it again.
+    volumes:
+      - models:/app/models
+    # Drain, never kill (§20).
+    stop_grace_period: 600s
+    command:
+      - uvicorn
+      - voice_worker.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;urllib.request.urlopen('http://localhost:8080/health/live')
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 6g
+
+  worker:
+    <<: *python-image
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - models:/app/models
+    stop_grace_period: 60s
+    command: ["arq", "worker.tasks.WorkerSettings"]
+
+  admin:
+    build:
+      context: ../../apps/admin
+      dockerfile: ../../infra/docker/Dockerfile.admin
+    image: uaagro/admin:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      API_BASE_URL: http://api:8000
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:?set ADMIN_SESSION_SECRET in .env}
+      NODE_ENV: production
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - "3000"
+
+  # TLS and routing. Caddy obtains and renews certificates itself; the two
+  # hostnames come from .env. The panel is the only thing a browser reaches;
+  # the WebSocket path is the only thing the telephony provider reaches.
+  caddy:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PANEL_HOST: ${PANEL_HOST:?set PANEL_HOST in .env, e.g. panel.uaagro.in}
+      VOICE_HOST: ${VOICE_HOST:?set VOICE_HOST in .env, e.g. voice.uaagro.in}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      admin:
+        condition: service_started
+      voice-worker:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  models:
+  caddy-data:
+  caddy-config:

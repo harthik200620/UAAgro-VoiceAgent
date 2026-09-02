@@ -161,18 +161,21 @@ class ExotelAdapter(HttpTelephonyAdapter):
         sid = self.settings.require("exotel_sid", needed_for="Exotel call control")
         return f"https://{self.settings.exotel_subdomain}/v1/Accounts/{sid}"
 
-    async def originate(self, *, to: str, from_: str, callback_url: str) -> str:
+    async def originate(
+        self, *, to: str, from_: str, callback_url: str, custom_field: str | None = None
+    ) -> str:
         destination = assert_approved_destination(to, self.approved_destinations)
-        body = await self._post(
-            "/Calls/connect.json",
-            {
-                "From": destination,
-                "CallerId": from_,
-                "Url": callback_url,
-                "TimeLimit": 900,
-                "TimeOut": RING_TIMEOUT_S,
-            },
-        )
+        request: dict[str, Any] = {
+            "From": destination,
+            "CallerId": from_,
+            "Url": callback_url,
+            "TimeLimit": 900,
+            "TimeOut": RING_TIMEOUT_S,
+        }
+        if custom_field:
+            # Echoed back as `custom_parameters` in the Voicebot start frame.
+            request["CustomField"] = custom_field
+        body = await self._post("/Calls/connect.json", request)
         call = body.get("Call", {})
         sid = str(call.get("Sid", "")) if isinstance(call, dict) else ""
         log.info("telephony.originated", provider=self.provider.value, sid=sid)
@@ -225,8 +228,13 @@ class PlivoAdapter(HttpTelephonyAdapter):
         auth_id = self.settings.require("plivo_auth_id", needed_for="Plivo call control")
         return f"https://api.plivo.com/v1/Account/{auth_id}"
 
-    async def originate(self, *, to: str, from_: str, callback_url: str) -> str:
+    async def originate(
+        self, *, to: str, from_: str, callback_url: str, custom_field: str | None = None
+    ) -> str:
         destination = assert_approved_destination(to, self.approved_destinations)
+        # Plivo carries no custom field on the call; the worker matches the
+        # dialled number against the contact being dialled instead.
+        del custom_field
         body = await self._post(
             "/Call/",
             {"to": destination, "from": from_, "answer_url": callback_url,

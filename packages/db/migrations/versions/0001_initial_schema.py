@@ -68,6 +68,11 @@ TRIGRAM_INDEXES = ("ix_products_name_hi_trgm", "ix_products_name_en_trgm")
 #: same revision history, different schemas.
 POST_0001_COLUMNS: dict[str, tuple[str, ...]] = {
     "campaigns": ("is_promotional", "dlt_entity_id"),
+    # Revision 0007: the operations panel.
+    "agent_configs": ("script",),
+    "centres": ("manager_name",),
+    "kb_documents": ("ingest_status", "ingest_error", "page_count"),
+    "campaign_contacts": ("call_id",),
 }
 
 #: Tables added by later migrations, excluded here.

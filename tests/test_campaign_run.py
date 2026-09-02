@@ -170,9 +170,13 @@ class RecordingDialer:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        #: The contact reference each dial carried, so the media path can
+        #: find the contact when the call connects.
+        self.custom_fields: list[str] = []
 
-    async def __call__(self, to_number: str, from_number: str) -> str:
+    async def __call__(self, to_number: str, from_number: str, custom_field: str = "") -> str:
         self.calls.append((to_number, from_number))
+        self.custom_fields.append(custom_field)
         return f"SID-{len(self.calls)}"
 
 
@@ -340,7 +344,7 @@ async def test_a_failed_dial_does_not_abandon_the_rest_of_the_list(
     """One carrier rejection is not a reason to stop calling everybody else."""
     attempts = 0
 
-    async def flaky(to_number: str, from_number: str) -> str:
+    async def flaky(to_number: str, from_number: str, custom_field: str = "") -> str:
         nonlocal attempts
         attempts += 1
         if attempts == 1:

@@ -1,434 +1,397 @@
 import "server-only";
 
-import { env } from "./env";
+import type {
+  CallDetail,
+  CallRow,
+  CampaignControl,
+  CampaignDetail,
+  CampaignImport,
+  CampaignInput,
+  CampaignSummary,
+  CentreInput,
+  CentrePatch,
+  CentreRow,
+  ConnectionInfo,
+  ConnectionTest,
+  FlowDetail,
+  FlowPreview,
+  FlowScript,
+  FlowType,
+  FlowVersion,
+  KbDocumentRow,
+  KnowledgeAnswer,
+  LiveSnapshot,
+  StockRow,
+  StorageReport,
+  TransferRules,
+} from "@/lib/contract";
 import type { Session } from "@/lib/rbac";
 
+import { env } from "./env";
+
 /**
- * The only route from the panel to the control plane (§15, §17).
+ * The only route from the panel to the control plane (docs/ADMIN_API.md).
  *
- * Every fetch here runs in a Server Component or a Server Action, never in the
- * browser. That is not a performance choice: §1 N6 keeps prompts, flows,
- * catalogue logic and crop recommendations off the client entirely, and the way
- * to guarantee that is for the browser to have no credential with which to ask
- * for them.
+ * Every function here runs in a Server Component, a Server Action or a Route
+ * Handler, never in the browser. That is not a performance choice: the
+ * browser holds no credential, so there is nothing it could ask the API for,
+ * and the `server-only` import makes that structural -- a Client Component
+ * that imports this file fails `next build`.
  *
- * The `server-only` import makes it structural rather than aspirational -- a
- * Client Component that imports this file fails `next build`.
+ * One function per route, named for what the operator does with it. The
+ * shapes live in `@/lib/contract`, which is where components read them.
  */
 
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly remedy?: string,
+    /** The contract's error code: `four_eyes`, `telephony_unconfigured`, ... */
+    readonly code: string | null = null,
+    /** What to do about it, in the API's words, when it says. */
+    readonly remedy: string | null = null,
   ) {
     super(message);
     this.name = "ApiError";
   }
 }
 
+/** What a Server Action hands back when a call fails: words, and a code the UI may act on. */
+export type Failure = { ok: false; message: string; code: string | null };
+
+export type ActionResult<T> = { ok: true; value: T } | Failure;
+
+/**
+ * An error as the operator should read it. The API's remedy wins over its
+ * message when there is one -- "add a caller ID series first" is more use
+ * than "campaign blocked" -- and anything else gets the caller's fallback.
+ */
+export function failure(error: unknown, fallback: string): Failure {
+  if (error instanceof ApiError) {
+    return { ok: false, message: error.remedy ?? error.message, code: error.code };
+  }
+  return { ok: false, message: fallback, code: null };
+}
+
 type FetchOptions = {
   session: Session;
   method?: "GET" | "POST" | "PATCH" | "DELETE";
+  /** JSON-encoded, unless it is a FormData, which goes multipart as it is. */
   body?: unknown;
-  /** Set on mutations so a retried request cannot act twice (§17). */
+  /** Set on mutations so a retried request cannot act twice. */
   idempotencyKey?: string;
-  /** Seconds. Omit for mutations. */
-  revalidate?: number;
 };
 
-export async function apiFetch<T>(
-  path: string,
-  options: FetchOptions,
-): Promise<T> {
-  const { session, method = "GET", body, idempotencyKey, revalidate } = options;
-  const { apiBaseUrl } = env();
+export async function apiFetch<T>(path: string, options: FetchOptions): Promise<T> {
+  const { session, method = "GET", body, idempotencyKey } = options;
+  const multipart = body instanceof FormData;
 
   const headers: Record<string, string> = {
-    "content-type": "application/json",
-    // A bearer token, and nothing that asserts identity by itself.
-    //
-    // The role and centre scope travel *inside* the signed token, and the API
-    // binds its RLS GUCs from the decoded claims. That is the whole point: the
-    // panel cannot widen its own scope, because it has no way to state one --
-    // an earlier version of this file sent `x-user-role` and `x-centre-ids`
-    // headers, which the API never read, and which would have been a
-    // privilege-escalation surface if it had.
+    accept: "application/json",
+    // A bearer token, and nothing that asserts identity by itself. The role
+    // and centre scope travel *inside* the signed token and the API binds its
+    // RLS GUCs from the decoded claims, so the panel cannot widen its own
+    // scope: it has no way to state one.
     authorization: `Bearer ${session.accessToken}`,
   };
+  // A multipart body carries its boundary in the header the runtime writes;
+  // naming the type here would strip it.
+  if (body !== undefined && !multipart) headers["content-type"] = "application/json";
   if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
 
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(`${env().apiBaseUrl}${path}`, {
     method,
     headers,
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    // Mutations are never cached; reads are cached only when the caller says
-    // how stale is acceptable. §15 requires catalogue changes to reach the
-    // agent "within seconds" and shows the propagation delay, so a silent
-    // default TTL here would make that number a lie.
-    ...(method === "GET" && revalidate !== undefined
-      ? { next: { revalidate } }
-      : { cache: "no-store" as const }),
+    ...(body === undefined ? {} : { body: multipart ? body : JSON.stringify(body) }),
+    // Nothing the panel shows is safe to serve stale: live calls, stock a
+    // farmer is about to be told about, a campaign that may just have been
+    // stopped. Every read goes to the control plane.
+    cache: "no-store",
   });
 
-  if (!response.ok) {
-    // The body is read for the typed error the domain layer produces -- code,
-    // message, remedy -- rather than being surfaced as a status number. A
-    // centre manager reading "422" learns nothing; one reading "this
-    // recommendation needs a pre-harvest interval" fixes it.
-    let message = `Request failed with ${response.status}`;
-    let remedy: string | undefined;
-    try {
-      const payload = (await response.json()) as {
-        message?: string;
-        remedy?: string;
-      };
-      if (payload.message) message = payload.message;
-      if (payload.remedy) remedy = payload.remedy;
-    } catch {
-      // A non-JSON error body is not worth failing over; the status stands.
-    }
-    throw new ApiError(response.status, message, remedy);
-  }
+  if (!response.ok) throw await readError(response);
 
-  return (await response.json()) as T;
+  // A 204 (a delete) has no body to parse; the caller's T is void there.
+  return (response.status === 204 ? undefined : await response.json()) as T;
 }
 
 /**
- * Read models the panel renders.
- *
- * Declared here rather than inferred from the API so a field the control plane
- * stops sending is a type error at build time, not an empty column at 6am in
- * sowing season.
+ * The typed error the API produces -- code, message, remedy -- rather than a
+ * status number. A manager reading "422" learns nothing; one reading "these
+ * farmers need recorded consent first" fixes it.
  */
+async function readError(response: Response): Promise<ApiError> {
+  let message = `Request failed with ${response.status}`;
+  let code: string | null = null;
+  let remedy: string | null = null;
+  try {
+    const payload = (await response.json()) as {
+      error?: { code?: string; message?: string; remedy?: string };
+      detail?: unknown;
+    };
+    if (payload.error?.message) message = payload.error.message;
+    else if (typeof payload.detail === "string") message = payload.detail;
+    code = payload.error?.code ?? null;
+    remedy = payload.error?.remedy ?? null;
+  } catch {
+    // A non-JSON error body is not worth failing over; the status stands.
+  }
+  return new ApiError(response.status, message, code, remedy);
+}
 
-export type DashboardMetrics = {
-  inboundCalls: number;
-  outboundCalls: number;
-  answerRate: number;
-  avgDurationSeconds: number;
-  resolutionRate: number;
-  transferRate: number;
-  containmentRate: number;
-  liveConcurrency: number;
-  concurrencyCapacity: number;
-  spendTodayRupees: number;
-  budgetRupees: number;
-  latencyP50Ms: number;
-  latencyP95Ms: number;
-  unhandledIntents: number;
-  failedCalls: number;
-  topIntents: { intent: string; count: number }[];
-  topProducts: { sku: string; nameHi: string; count: number }[];
+function query(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") search.set(key, String(value));
+  }
+  const text = search.toString();
+  return text ? `?${text}` : "";
+}
+
+const id = encodeURIComponent;
+
+/* Live */
+
+export const getLiveSnapshot = (session: Session) =>
+  apiFetch<LiveSnapshot>("/admin/live/snapshot", { session });
+
+/* Calls */
+
+export type CallsQuery = {
+  direction?: string;
+  outcome?: string;
+  centreId?: string;
+  campaignId?: string;
+  from?: string;
+  to?: string;
+  q?: string;
+  limit: number;
+  offset: number;
 };
 
-export type AdvisoryRow = {
-  id: string;
-  cropHi: string;
-  stage: string | null;
-  problemHi: string | null;
-  productHi: string;
-  dose: string;
-  timingHi: string | null;
-  phiDays: number | null;
-  precautionHi: string | null;
-  isCropProtection: boolean;
-  approvalState: "draft" | "pending_agronomist" | "approved" | "rejected";
-  approvedByName: string | null;
-  approvedAt: string | null;
-};
-
-export type GateCheck =
-  | "consent"
-  | "dnd"
-  | "internal_dnc"
-  | "caller_id_series"
-  | "dlt_registration"
-  | "calling_window"
-  | "frequency_cap"
-  | "duplicate_suppression";
-
-export type CampaignGate = {
-  total: number;
-  eligible: number;
-  removed: Record<GateCheck, number>;
-  blockedBy: GateCheck[];
-  estimatedCostRupees: number;
-  estimatedMinutes: number;
-};
-
-export type CallRow = {
-  id: string;
-  callRef: string;
-  startedAt: string;
-  direction: "inbound" | "outbound";
-  centreCode: string | null;
-  centreId: string | null;
-  language: string;
-  qualityTier: "A" | "B" | "C";
-  durationSeconds: number;
-  outcome: string;
-  intent: string | null;
-  transferred: boolean;
-  costRupees: number;
-  /** Last four digits only. The panel never receives a full number (§17). */
-  callerLast4: string | null;
-};
-
-export const getDashboard = (session: Session, range: string) =>
-  apiFetch<DashboardMetrics>(`/admin/dashboard?range=${range}`, {
-    session,
-    // Ten seconds. The dashboard is glanced at, not watched -- Live Calls is
-    // the screen that streams.
-    revalidate: 10,
-  });
-
-export const getAdvisoryRows = (session: Session) =>
-  apiFetch<{ rows: AdvisoryRow[]; unapproved: number }>("/admin/advisory", {
-    session,
-    revalidate: 0,
-  });
-
-export const getCampaignGate = (session: Session, campaignId: string) =>
-  apiFetch<CampaignGate>(`/admin/campaigns/${campaignId}/gate`, {
-    session,
-    // Never cached. §13.1's gate is evaluated at dial time and a stale
-    // eligible-count on an approval screen is a reviewer approving a number
-    // that is no longer true.
-    revalidate: 0,
-  });
-
-export const getCalls = (session: Session, query: string) =>
-  apiFetch<{ rows: CallRow[]; total: number }>(`/admin/calls?${query}`, {
-    session,
-    revalidate: 5,
-  });
-
-export type FlowVersion = {
-  id: string;
-  name: string;
-  flowType: "inbound" | "outbound";
-  version: number;
-  isPublished: boolean;
-  publishedAt: string | null;
-  publishedByName: string | null;
-  changelog: string | null;
-  toolAllowlist: string[];
-  updatedAt: string;
-};
-
-/**
- * The prompt body.
- *
- * Deliberately a separate type from `FlowVersion`, and fetched separately.
- * §1 N6 keeps prompts server-side; listing every version should not put the
- * whole prompt library in one response, and a component that only needs the
- * list cannot accidentally receive one.
- */
-export type FlowDetail = FlowVersion & {
-  systemPrompt: string;
-  greetingTemplate: string;
-  closingTemplate: string;
-  escalationRules: Record<string, unknown>;
-  languageRoutes: Record<string, unknown>;
-  llmSettings: Record<string, unknown>;
-  ttsSettings: Record<string, unknown>;
-  guardrails: Record<string, unknown>;
-};
-
-export type FarmerRow = {
-  id: string;
-  fullName: string;
-  village: string | null;
-  districtName: string | null;
-  centreCode: string | null;
-  preferredLanguage: string;
-  crops: string[];
-  landAreaBigha: number | null;
-  /** Four digits. There is no field here for anything longer (§17). */
-  phoneLast4: string;
-  isDnc: boolean;
-  hasPromotionalConsent: boolean;
-  lastContactAt: string | null;
-};
-
-export type InventoryRow = {
-  variantId: string;
-  sku: string;
-  productHi: string;
-  packSize: string;
-  centreId: string;
-  centreCode: string;
-  quantity: number;
-  sellingPriceRupees: number;
-  isAvailable: boolean;
-  updatedAt: string;
-};
-
-export type KbDocumentRow = {
-  id: string;
-  title: string;
-  sourceType: string;
-  language: string;
-  version: number;
-  isPublished: boolean;
-  chunkCount: number;
-  embeddedCount: number;
-  updatedAt: string;
-};
-
-export type Analytics = {
-  costPerCallRupees: number;
-  costPerResolvedRupees: number;
-  costByComponent: Record<string, number>;
-  byLanguage: {
-    language: string;
-    calls: number;
-    avgConfidence: number | null;
-    transferRate: number;
-  }[];
-  byCentre: {
-    centreCode: string;
-    calls: number;
-    avgConfidence: number | null;
-    resolutionRate: number;
-  }[];
-};
-
-export type SpamRuleRow = {
-  id: string;
-  ruleType: string;
-  pattern: string | null;
-  isActive: boolean;
-  action: string;
-  hitCount: number;
-  falsePositiveCount: number;
-  falsePositiveRate: number;
-};
-
-export type UserRow = {
-  id: string;
-  email: string;
-  fullName: string;
-  role: string;
-  centreIds: string[];
-  isActive: boolean;
-  mfaEnrolled: boolean;
-  lastLoginAt: string | null;
-};
-
-export type AuditRow = {
-  chainIndex: number;
-  at: string;
-  actorName: string | null;
-  action: string;
-  resourceType: string;
-  resourceId: string | null;
-  before: Record<string, unknown> | null;
-  after: Record<string, unknown> | null;
-};
-
-export const getFlows = (session: Session, flowType?: string) =>
-  apiFetch<FlowVersion[]>(
-    `/admin/flows${flowType ? `?flow_type=${flowType}` : ""}`,
-    { session, revalidate: 0 },
+export const getCalls = (session: Session, filters: CallsQuery) =>
+  apiFetch<{ rows: CallRow[]; total: number }>(
+    `/admin/calls${query({
+      direction: filters.direction,
+      outcome: filters.outcome,
+      centre_id: filters.centreId,
+      campaign_id: filters.campaignId,
+      from: filters.from,
+      to: filters.to,
+      q: filters.q,
+      limit: filters.limit,
+      offset: filters.offset,
+    })}`,
+    { session },
   );
 
-export const getFlowDetail = (session: Session, id: string) =>
-  apiFetch<FlowDetail>(`/admin/flows/${id}`, { session, revalidate: 0 });
+export const getCall = (session: Session, callId: string) =>
+  apiFetch<CallDetail>(`/admin/calls/${id(callId)}`, { session });
 
-export const publishFlow = (session: Session, id: string, key: string) =>
-  apiFetch<{ id: string; version: number; isPublished: boolean; previousVersion: number | null }>(
-    `/admin/flows/${id}/publish`,
-    { session, method: "POST", idempotencyKey: key },
-  );
+/* Outbound */
 
-export const getFarmers = (session: Session, query: string) =>
-  apiFetch<{ rows: FarmerRow[]; total: number }>(`/admin/farmers?${query}`, {
-    session,
-    revalidate: 0,
-  });
+export const getCampaigns = (session: Session) =>
+  apiFetch<CampaignSummary[]>("/admin/campaigns", { session });
 
-export const setFarmerDnc = (
-  session: Session,
-  farmerId: string,
-  isDnc: boolean,
-  key: string,
-) =>
-  apiFetch<{ isDnc: boolean }>(`/admin/farmers/${farmerId}/dnc`, {
+export const getCampaign = (session: Session, campaignId: string) =>
+  apiFetch<CampaignDetail>(`/admin/campaigns/${id(campaignId)}`, { session });
+
+export const createCampaign = (session: Session, input: CampaignInput, key: string) =>
+  apiFetch<CampaignImport>("/admin/campaigns", {
     session,
     method: "POST",
-    body: { isDnc },
+    body: input,
     idempotencyKey: key,
   });
 
-export const getInventory = (session: Session, query: string) =>
-  apiFetch<{ rows: InventoryRow[]; total: number; propagationSeconds: number }>(
-    `/admin/inventory?${query}`,
-    // Never cached. §15.1 shows the propagation delay to the agent; adding an
-    // unrelated cache in front of the grid would make that number wrong.
-    { session, revalidate: 0 },
+export const updateCampaign = (
+  session: Session,
+  campaignId: string,
+  patch: { maxConcurrent?: number; name?: string },
+) =>
+  apiFetch<CampaignSummary>(`/admin/campaigns/${id(campaignId)}`, {
+    session,
+    method: "PATCH",
+    body: patch,
+  });
+
+const campaignControl =
+  (control: CampaignControl) => (session: Session, campaignId: string, key: string) =>
+    apiFetch<CampaignSummary>(`/admin/campaigns/${id(campaignId)}/${control}`, {
+      session,
+      method: "POST",
+      idempotencyKey: key,
+    });
+
+/** 403 with code `four_eyes` when the caller created the campaign. */
+export const approveCampaign = campaignControl("approve");
+export const startCampaign = campaignControl("start");
+export const pauseCampaign = campaignControl("pause");
+export const resumeCampaign = campaignControl("resume");
+export const stopCampaign = campaignControl("stop");
+
+/* Flows */
+
+export const getFlows = (session: Session, flowType?: FlowType) =>
+  apiFetch<FlowVersion[]>(`/admin/flows${query({ flow_type: flowType })}`, { session });
+
+export const getFlow = (session: Session, flowId: string) =>
+  apiFetch<FlowDetail>(`/admin/flows/${id(flowId)}`, { session });
+
+/** A new draft cloned from `flowId` with the edits applied; published versions are immutable. */
+export const createFlowVersion = (
+  session: Session,
+  flowId: string,
+  body: { name?: string; script: FlowScript; changelog?: string },
+  key: string,
+) =>
+  apiFetch<FlowDetail>(`/admin/flows/${id(flowId)}/versions`, {
+    session,
+    method: "POST",
+    body,
+    idempotencyKey: key,
+  });
+
+/** Drafts only; the API answers 409 for a published version. */
+export const updateFlow = (
+  session: Session,
+  flowId: string,
+  patch: { name?: string; script?: FlowScript; changelog?: string },
+) =>
+  apiFetch<FlowDetail>(`/admin/flows/${id(flowId)}`, {
+    session,
+    method: "PATCH",
+    body: patch,
+  });
+
+export const publishFlow = (session: Session, flowId: string, key: string) =>
+  apiFetch<{ id: string; version: number; isPublished: boolean; previousVersion: number | null }>(
+    `/admin/flows/${id(flowId)}/publish`,
+    { session, method: "POST", idempotencyKey: key },
   );
+
+/** How the voice will say it. No vendor call. */
+export const previewFlow = (session: Session, flowId: string, text: string) =>
+  apiFetch<FlowPreview>(`/admin/flows/${id(flowId)}/preview`, {
+    session,
+    method: "POST",
+    body: { text },
+  });
+
+/** A real call with this draft; 503 with a remedy when telephony is not configured. */
+export const testCallFlow = (session: Session, flowId: string, phone: string, key: string) =>
+  apiFetch<{ callSid: string }>(`/admin/flows/${id(flowId)}/test-call`, {
+    session,
+    method: "POST",
+    body: { phone },
+    idempotencyKey: key,
+  });
+
+/* Inbound: knowledge base */
 
 export const getKbDocuments = (session: Session) =>
-  apiFetch<KbDocumentRow[]>("/admin/knowledge/documents", {
+  apiFetch<KbDocumentRow[]>("/admin/knowledge/documents", { session });
+
+/** `form` carries `file` plus optional `title` and `language`. */
+export const uploadKbDocument = (session: Session, form: FormData, key: string) =>
+  apiFetch<KbDocumentRow>("/admin/knowledge/documents", {
     session,
-    revalidate: 0,
+    method: "POST",
+    body: form,
+    idempotencyKey: key,
   });
 
-export const getAnalytics = (session: Session, days: number) =>
-  apiFetch<Analytics>(`/admin/analytics?days=${days}`, {
+export const addKbUrl = (
+  session: Session,
+  body: { url: string; title?: string; maxPages?: number },
+  key: string,
+) =>
+  apiFetch<KbDocumentRow>("/admin/knowledge/documents", {
     session,
-    revalidate: 60,
+    method: "POST",
+    body,
+    idempotencyKey: key,
   });
 
-export const getSpamRules = (session: Session) =>
-  apiFetch<SpamRuleRow[]>("/admin/spam-rules", { session, revalidate: 30 });
+export const setKbPublished = (session: Session, documentId: string, isPublished: boolean) =>
+  apiFetch<KbDocumentRow>(`/admin/knowledge/documents/${id(documentId)}`, {
+    session,
+    method: "PATCH",
+    body: { isPublished },
+  });
 
-export const getUsers = (session: Session) =>
-  apiFetch<UserRow[]>("/admin/users", { session, revalidate: 0 });
+export const deleteKbDocument = (session: Session, documentId: string) =>
+  apiFetch<void>(`/admin/knowledge/documents/${id(documentId)}`, {
+    session,
+    method: "DELETE",
+  });
 
-export const getAudit = (session: Session, query: string) =>
-  apiFetch<{
-    rows: AuditRow[];
-    total: number;
-    chainIntact: boolean;
-    brokenAt: number | null;
-  }>(`/admin/audit?${query}`, { session, revalidate: 0 });
+/** `answer: true` runs the same agent the phone uses -- a model call. */
+export const askKnowledge = (session: Session, question: string, answer: boolean) =>
+  apiFetch<KnowledgeAnswer>("/admin/knowledge/ask", {
+    session,
+    method: "POST",
+    body: { question, answer },
+  });
 
-export type LiveCall = {
-  id: string;
-  callRef: string;
-  startedAt: string;
-  direction: string;
-  centreCode: string | null;
-  language: string;
-  callerLast4: string | null;
-  elapsedSeconds: number;
-  turnCount: number;
-  lastIntent: string | null;
-};
+/* Inbound: centres, stock, hand-over */
 
-export type OfferRow = {
-  id: string;
-  code: string;
-  name: string;
-  descriptionHi: string;
-  discountType: string;
-  discountValue: number;
-  validFrom: string;
-  validTo: string;
-  isActive: boolean;
-  whatsappTemplateName: string | null;
-};
+export const getCentres = (session: Session) =>
+  apiFetch<CentreRow[]>("/admin/centres", { session });
 
-export const getLiveCalls = (session: Session) =>
-  apiFetch<{ rows: LiveCall[]; concurrency: number; capacity: number }>(
-    "/admin/live-calls",
-    // Never cached: this is the one screen that is watched rather than
-    // glanced at, and a cached "live" view is a contradiction.
-    { session, revalidate: 0 },
-  );
+export const createCentre = (session: Session, input: CentreInput, key: string) =>
+  apiFetch<CentreRow>("/admin/centres", {
+    session,
+    method: "POST",
+    body: input,
+    idempotencyKey: key,
+  });
 
-export const getOffers = (session: Session) =>
-  apiFetch<OfferRow[]>("/admin/offers", { session, revalidate: 30 });
+export const updateCentre = (session: Session, centreId: string, patch: CentrePatch) =>
+  apiFetch<CentreRow>(`/admin/centres/${id(centreId)}`, {
+    session,
+    method: "PATCH",
+    body: patch,
+  });
+
+export const getCentreStock = (session: Session, centreId: string) =>
+  apiFetch<StockRow[]>(`/admin/centres/${id(centreId)}/stock`, { session });
+
+/** Reaches the agent within five seconds. */
+export const updateInventory = (
+  session: Session,
+  inventoryId: string,
+  patch: { isAvailable?: boolean; price?: number; stockQty?: number },
+) =>
+  apiFetch<StockRow>(`/admin/inventory/${id(inventoryId)}`, {
+    session,
+    method: "PATCH",
+    body: patch,
+  });
+
+export const getTransferRules = (session: Session) =>
+  apiFetch<TransferRules>("/admin/transfer-rules", { session });
+
+export const updateTransferRules = (session: Session, fallbackNumber: string) =>
+  apiFetch<TransferRules>("/admin/transfer-rules", {
+    session,
+    method: "PATCH",
+    body: { fallbackNumber },
+  });
+
+/* Data */
+
+export const getStorage = (session: Session) =>
+  apiFetch<StorageReport>("/admin/data/storage", { session });
+
+/** Never carries the password. */
+export const getConnection = (session: Session) =>
+  apiFetch<ConnectionInfo>("/admin/data/connection", { session });
+
+/** Tests only; the DSN is stored and logged by nobody. */
+export const testConnection = (session: Session, dsn: string) =>
+  apiFetch<ConnectionTest>("/admin/data/connection/test", {
+    session,
+    method: "POST",
+    body: { dsn },
+  });

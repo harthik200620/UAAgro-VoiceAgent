@@ -1,20 +1,21 @@
 "use server";
 
+import { getLocale, getTranslations } from "next-intl/server";
 import { redirect } from "next/navigation";
 
 import { env } from "@/server/env";
 import { clearSessionCookie, setSessionCookie } from "@/server/session";
 
 /**
- * Sign-in against the control plane (§17).
+ * Sign-in against the control plane.
  *
  * The credentials cross the wire once, from this Server Action to the API, and
  * are never held anywhere. The browser posts a form to the panel's own origin;
  * the panel talks to the API server-side. That is why the panel needs no API
  * credential of its own and why no token reaches client JavaScript.
  *
- * §17 makes TOTP mandatory, so this is a two-step flow and the first step
- * never returns a session:
+ * TOTP is mandatory, so this is a two-step flow and the first step never
+ * returns a session:
  *
  *   password ─→ enrolment required (first sign-in: a secret to scan)
  *            └→ challenge (subsequent: a code from the authenticator)
@@ -28,7 +29,7 @@ export type LoginState =
   | { step: "enrol"; mfaToken: string; secret: string; provisioningUri: string; error?: string }
   | { step: "verify"; mfaToken: string; error?: string };
 
-type ApiError = { message?: string; remedy?: string };
+type ApiError = { error?: { message?: string; remedy?: string }; message?: string; remedy?: string };
 
 async function post(path: string, body: unknown): Promise<Response> {
   return fetch(`${env().apiBaseUrl}${path}`, {
@@ -42,18 +43,20 @@ async function post(path: string, body: unknown): Promise<Response> {
 async function readError(response: Response, fallback: string): Promise<string> {
   try {
     const payload = (await response.json()) as ApiError;
-    return payload.remedy ?? payload.message ?? fallback;
+    const inner = payload.error ?? payload;
+    return inner.remedy ?? inner.message ?? fallback;
   } catch {
     return fallback;
   }
 }
 
 async function signIn(formData: FormData): Promise<LoginState> {
+  const t = await getTranslations("login.errors");
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
 
   if (!email || !password) {
-    return { step: "credentials", error: "Enter your email and password." };
+    return { step: "credentials", error: t("missingCredentials") };
   }
 
   let response: Response;
@@ -62,16 +65,16 @@ async function signIn(formData: FormData): Promise<LoginState> {
   } catch {
     // Named rather than generic: an operator whose control plane is down
     // should not spend ten minutes doubting their own password.
-    return { step: "credentials", error: "The control plane is not reachable." };
+    return { step: "credentials", error: t("unreachable") };
   }
 
   if (!response.ok) {
     // Deliberately does not distinguish "no such account" from "wrong
-    // password". §17: an unauthenticated caller must not be able to enumerate
-    // who has an account here.
+    // password": an unauthenticated caller must not be able to enumerate who
+    // has an account here.
     return {
       step: "credentials",
-      error: await readError(response, "Those credentials were not accepted."),
+      error: await readError(response, t("rejected")),
     };
   }
 
@@ -93,16 +96,17 @@ async function signIn(formData: FormData): Promise<LoginState> {
   if (payload.mfa_token) {
     return { step: "verify", mfaToken: payload.mfa_token };
   }
-  return { step: "credentials", error: "The control plane returned an unexpected response." };
+  return { step: "credentials", error: t("unexpected") };
 }
 
 async function submitMfa(
   previous: Extract<LoginState, { step: "enrol" | "verify" }>,
   formData: FormData,
 ): Promise<LoginState> {
+  const t = await getTranslations("login.errors");
   const code = String(formData.get("code") ?? "").trim();
   if (!/^\d{6}$/.test(code)) {
-    return { ...previous, error: "Enter the six-digit code from your authenticator." };
+    return { ...previous, error: t("badCode") };
   }
 
   const enrolling = previous.step === "enrol";
@@ -114,18 +118,16 @@ async function submitMfa(
   );
 
   if (!response.ok) {
-    return { ...previous, error: await readError(response, "That code was not accepted.") };
+    return { ...previous, error: await readError(response, t("codeRejected")) };
   }
 
   const token = (await response.json()) as { access_token?: string; expires_in?: number };
   if (!token.access_token) {
-    return { ...previous, error: "The control plane issued no token." };
+    return { ...previous, error: t("noToken") };
   }
 
   await setSessionCookie(token.access_token, token.expires_in ?? 900);
-  // `typedRoutes` knows only the `/[locale]/...` shapes, so there is no
-  // locale-less root to redirect to; `en` is the only configured locale.
-  redirect("/en");
+  redirect(`/${await getLocale()}`);
 }
 
 /**
@@ -149,5 +151,5 @@ export async function authenticate(
 
 export async function signOut(): Promise<void> {
   await clearSessionCookie();
-  redirect("/en/login");
+  redirect(`/${await getLocale()}/login`);
 }

@@ -32,6 +32,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from sqlalchemy import ARRAY, Numeric, Select, func, select, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from uaagro_db.audit import append_audit, verify_chain
 from uaagro_db.models import (
@@ -40,6 +41,7 @@ from uaagro_db.models import (
     AuditLog,
     Call,
     CallTurn,
+    Campaign,
     Centre,
     ConsentRecord,
     Crop,
@@ -47,10 +49,9 @@ from uaagro_db.models import (
     CropRecommendation,
     District,
     DndStatus,
+    DtmfEvent,
     Farmer,
     Inventory,
-    KbChunk,
-    KbDocument,
     Offer,
     Product,
     ProductVariant,
@@ -65,9 +66,11 @@ from uaagro_domain.enums import (
     CallOutcome,
     CallStatus,
     ConsentType,
+    FlowType,
     Role,
 )
 from uaagro_domain.errors import NotFoundError, ValidationError
+from uaagro_domain.script import OutboundScript
 from uaagro_domain.settings import get_defaults, get_settings
 from uaagro_domain.timezone import ist
 
@@ -78,6 +81,7 @@ from ..security.deps import (
     require_exact_roles,
     require_role,
 )
+from .panel_knowledge import KbDocumentRow, list_documents
 
 log = structlog.get_logger(__name__)
 
@@ -371,6 +375,11 @@ class CallRow(BaseModel):
     #: Last four digits, from the farmer record. §17: the call row holds only a
     #: hash, and nothing above the control plane ever sees more than this.
     callerLast4: str | None
+    farmerName: str | None
+    firstReplyMs: int | None
+    #: The first key the farmer pressed, when they pressed one.
+    dtmf: str | None
+    campaignId: str | None
 
 
 class CallList(BaseModel):
@@ -401,11 +410,24 @@ async def calls(
     _: Annotated[Principal, require_role(Role.READ_ONLY)],
     outcome: str | None = None,
     language: str | None = None,
+    direction: str | None = None,
+    centre_id: uuid.UUID | None = None,
+    campaign_id: uuid.UUID | None = None,
+    from_: Annotated[datetime | None, Query(alias="from")] = None,
+    to: datetime | None = None,
+    q: Annotated[str | None, Query(max_length=120)] = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> CallList:
+    first_digit = (
+        select(DtmfEvent.digit)
+        .where(DtmfEvent.call_id == Call.id)
+        .order_by(DtmfEvent.received_at)
+        .limit(1)
+        .scalar_subquery()
+    )
     statement: Select[Any] = (
-        select(Call, Centre.code, Farmer.phone_last4)
+        select(Call, Centre.code, Farmer.phone_last4, Farmer.full_name, first_digit)
         .outerjoin(Centre, Call.centre_id == Centre.id)
         .outerjoin(Farmer, Call.farmer_id == Farmer.id)
         .order_by(Call.started_at.desc())
@@ -414,9 +436,35 @@ async def calls(
         statement = statement.where(Call.outcome == outcome)
     if language:
         statement = statement.where(Call.language_final == language)
+    if direction:
+        statement = statement.where(Call.direction == direction)
+    if centre_id is not None:
+        statement = statement.where(Call.centre_id == centre_id)
+    if campaign_id is not None:
+        statement = statement.where(Call.campaign_id == campaign_id)
+    if from_ is not None:
+        statement = statement.where(Call.started_at >= from_)
+    if to is not None:
+        statement = statement.where(Call.started_at < to)
+    if q and q.strip():
+        # A substring match over what was said. Simple on purpose: the panel's
+        # search box is "find the call where somebody mentioned DAP", and the
+        # farmer's spelling in Devanagari is not what a stemmer expects.
+        needle = f"%{q.strip()}%"
+        spoken = (
+            select(CallTurn.id)
+            .where(CallTurn.call_id == Call.id, CallTurn.text_original.ilike(needle))
+            .limit(1)
+        )
+        statement = statement.where(spoken.exists() | Farmer.full_name.ilike(needle))
 
     total = int(await db.scalar(select(func.count()).select_from(statement.subquery())) or 0)
     rows = (await db.execute(statement.limit(limit).offset(offset))).all()
+
+    def first_reply(call: Call) -> int | None:
+        stats = call.latency_stats if isinstance(call.latency_stats, dict) else {}
+        value = stats.get("first_reply_ms")
+        return int(value) if value is not None else None
 
     return CallList(
         total=total,
@@ -438,8 +486,12 @@ async def calls(
                 transferred=bool(call.was_transferred),
                 costRupees=float(call.cost_total_inr or 0),
                 callerLast4=last4,
+                farmerName=farmer_name,
+                firstReplyMs=first_reply(call),
+                dtmf=digit,
+                campaignId=str(call.campaign_id) if call.campaign_id else None,
             )
-            for call, centre_code, last4 in rows
+            for call, centre_code, last4, farmer_name, digit in rows
         ],
     )
 
@@ -593,6 +645,9 @@ class FlowVersion(BaseModel):
     changelog: str | None
     toolAllowlist: list[str]
     updatedAt: str
+    #: Campaigns pinned to this exact version. Shown so an operator knows a
+    #: retired version is still what a running campaign speaks.
+    usedByCampaigns: int = 0
 
 
 class FlowDetail(FlowVersion):
@@ -612,9 +667,12 @@ class FlowDetail(FlowVersion):
     llmSettings: dict[str, Any]
     ttsSettings: dict[str, Any]
     guardrails: dict[str, Any]
+    #: What the panel edits: the outbound script's steps, or the inbound
+    #: greeting and closing. Everything above is shown, this is changed.
+    script: dict[str, Any]
 
 
-def _flow_version(row: AgentConfig, publisher: str | None) -> FlowVersion:
+def _flow_version(row: AgentConfig, publisher: str | None, used_by: int = 0) -> FlowVersion:
     return FlowVersion(
         id=str(row.id),
         name=row.name,
@@ -626,6 +684,55 @@ def _flow_version(row: AgentConfig, publisher: str | None) -> FlowVersion:
         changelog=row.changelog,
         toolAllowlist=list(row.tool_allowlist),
         updatedAt=row.updated_at.isoformat(),
+        usedByCampaigns=used_by,
+    )
+
+
+def _script_of(row: AgentConfig) -> dict[str, Any]:
+    """The editable script in the panel's shape (see docs/ADMIN_API.md)."""
+    if row.flow_type is FlowType.OUTBOUND:
+        return OutboundScript.from_config(row.script).to_panel()
+    stored = row.script if isinstance(row.script, dict) else {}
+    return {
+        "greetingKnown": row.greeting_template,
+        "greetingUnknown": str(stored.get("greeting_unknown") or row.greeting_template),
+        "closing": row.closing_template,
+    }
+
+
+async def _campaign_usage(db: AsyncSession, config_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+    if not config_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(Campaign.agent_config_id, func.count())
+            .where(Campaign.agent_config_id.in_(config_ids), Campaign.deleted_at.is_(None))
+            .group_by(Campaign.agent_config_id)
+        )
+    ).all()
+    return {config_id: int(count) for config_id, count in rows}
+
+
+async def build_flow_detail(db: AsyncSession, row: AgentConfig) -> FlowDetail:
+    """One version, body included. Shared with the panel's editing routes."""
+    publisher = (
+        await db.scalar(select(User.full_name).where(User.id == row.published_by_user_id))
+        if row.published_by_user_id
+        else None
+    )
+    usage = await _campaign_usage(db, [row.id])
+    base = _flow_version(row, publisher, usage.get(row.id, 0))
+    return FlowDetail(
+        **base.model_dump(),
+        systemPrompt=row.system_prompt,
+        greetingTemplate=row.greeting_template,
+        closingTemplate=row.closing_template,
+        escalationRules=dict(row.escalation_rules),
+        languageRoutes=dict(row.language_routes),
+        llmSettings=dict(row.llm_settings),
+        ttsSettings=dict(row.tts_settings),
+        guardrails=dict(row.guardrails),
+        script=_script_of(row),
     )
 
 
@@ -650,7 +757,8 @@ async def flows(
     if flow_type:
         statement = statement.where(AgentConfig.flow_type == flow_type)
     rows = (await db.execute(statement)).all()
-    return [_flow_version(row, publisher) for row, publisher in rows]
+    usage = await _campaign_usage(db, [row.id for row, _ in rows])
+    return [_flow_version(row, publisher, usage.get(row.id, 0)) for row, publisher in rows]
 
 
 @router.get("/flows/{config_id}", response_model=FlowDetail)
@@ -666,23 +774,7 @@ async def flow_detail(
     )
     if row is None:
         raise NotFoundError(resource="agent_config", identifier=str(config_id))
-    publisher = (
-        await db.scalar(select(User.full_name).where(User.id == row.published_by_user_id))
-        if row.published_by_user_id
-        else None
-    )
-    base = _flow_version(row, publisher)
-    return FlowDetail(
-        **base.model_dump(),
-        systemPrompt=row.system_prompt,
-        greetingTemplate=row.greeting_template,
-        closingTemplate=row.closing_template,
-        escalationRules=dict(row.escalation_rules),
-        languageRoutes=dict(row.language_routes),
-        llmSettings=dict(row.llm_settings),
-        ttsSettings=dict(row.tts_settings),
-        guardrails=dict(row.guardrails),
-    )
+    return await build_flow_detail(db, row)
 
 
 class PublishResult(BaseModel):
@@ -1141,54 +1233,20 @@ async def inventory(
 # --------------------------------------------------------------------------- #
 
 
-class KbDocumentRow(BaseModel):
-    id: str
-    title: str
-    sourceType: str
-    language: str
-    version: int
-    isPublished: bool
-    chunkCount: int
-    embeddedCount: int
-    updatedAt: str
-
-
 @router.get("/knowledge/documents", response_model=list[KbDocumentRow])
 async def knowledge_documents(
     db: DbDep,
     _: Annotated[Principal, require_role(Role.READ_ONLY)],
 ) -> list[KbDocumentRow]:
-    """Documents with their embedding progress.
+    """Documents with their indexing and embedding progress.
 
-    ``embeddedCount`` separate from ``chunkCount`` because they diverge in a
-    way that matters: ``uaagro-kb ingest`` completes BM25-only when the
-    embedding model is unavailable, and those chunks retrieve far worse without
-    ever looking broken. A document showing 40 chunks and 0 embedded is the
-    explanation for "the agent cannot find this".
+    ``embedded`` separate from ``chunks`` because they diverge in a way that
+    matters: ingestion completes BM25-only when the embedding model is
+    unavailable, and those chunks retrieve far worse without ever looking
+    broken. A document showing 40 chunks and 0 embedded is the explanation for
+    "the agent cannot find this".
     """
-    embedded = func.count(KbChunk.embedding).label("embedded")
-    statement: Select[Any] = (
-        select(KbDocument, func.count(KbChunk.id).label("chunks"), embedded)
-        .outerjoin(KbChunk, KbChunk.document_id == KbDocument.id)
-        .where(KbDocument.deleted_at.is_(None))
-        .group_by(KbDocument.id)
-        .order_by(KbDocument.title)
-    )
-    rows = (await db.execute(statement)).all()
-    return [
-        KbDocumentRow(
-            id=str(doc.id),
-            title=doc.title,
-            sourceType=doc.source_type,
-            language=doc.language,
-            version=doc.version,
-            isPublished=doc.is_published,
-            chunkCount=int(chunks or 0),
-            embeddedCount=int(embedded_count or 0),
-            updatedAt=doc.updated_at.isoformat(),
-        )
-        for doc, chunks, embedded_count in rows
-    ]
+    return await list_documents(db)
 
 
 # --------------------------------------------------------------------------- #

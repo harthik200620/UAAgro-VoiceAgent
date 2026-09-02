@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * §1 N6 and §17: nothing secret reaches the browser bundle.
+ * Nothing secret reaches the browser bundle.
  *
  * These are source-level checks rather than bundle analysis, and that is a
  * deliberate trade. A bundle check is stronger but only runs after a build and
@@ -52,6 +52,18 @@ describe("the server-only boundary", () => {
     }
   });
 
+  it("marks every module under src/server as server-only", () => {
+    // The API client, the session, the proxy: each holds or forwards the
+    // bearer token, so each must refuse to be bundled for the browser.
+    const serverModules = FILES.filter((file) => file.path.startsWith("server/"));
+    expect(serverModules.length).toBeGreaterThan(3);
+    for (const file of serverModules) {
+      expect(file.source, `${file.path} is not marked server-only`).toMatch(
+        /import ["']server-only["']/,
+      );
+    }
+  });
+
   it("never exposes a secret through NEXT_PUBLIC_", () => {
     // Next inlines anything prefixed NEXT_PUBLIC_ directly into client
     // JavaScript. One well-meaning entry ships the key to everyone.
@@ -66,20 +78,35 @@ describe("the server-only boundary", () => {
     }
   });
 
-  it("keeps client components away from the control-plane client", () => {
-    for (const file of FILES) {
-      if (!isClient(file.source)) continue;
+  it("keeps client components away from server modules", () => {
+    // Types included: `import type` is erased, but a client file that names
+    // `@/server/*` at all is one edit away from importing a value from it.
+    const clientFiles = FILES.filter((file) => isClient(file.source));
+    expect(clientFiles.length).toBeGreaterThan(5);
+    for (const file of clientFiles) {
       expect(
         file.source,
-        `${file.path} is a client component importing the API client`,
+        `${file.path} is a client component importing a server module`,
       ).not.toMatch(/from ["']@\/server\//);
     }
   });
 
+  it("routes every /api handler through the authenticating proxy", () => {
+    // The proxy is where the session is checked and the bearer token is
+    // attached. A handler that fetched the API by itself would either forget
+    // the 401 or, worse, accept a token from the request.
+    const handlers = FILES.filter((file) => /^app\/api\/.*\/route\.ts$/.test(file.path));
+    expect(handlers.length).toBe(5);
+    for (const file of handlers) {
+      expect(file.source, `${file.path} bypasses proxyApi`).toContain("proxyApi(");
+      expect(file.source, `${file.path} builds its own fetch`).not.toMatch(/\bfetch\(/);
+    }
+  });
+
   it("keeps prompts and model configuration out of client components", () => {
-    // §1 N6: prompts, flows, catalogue logic and crop recommendations never
-    // reach a client bundle. A prompt in the browser is a prompt a competitor
-    // can read and a caller can learn to steer.
+    // Prompts, flows and catalogue logic never reach a client bundle. A prompt
+    // in the browser is a prompt a competitor can read and a caller can learn
+    // to steer.
     for (const file of FILES) {
       if (!isClient(file.source)) continue;
       for (const forbidden of [
@@ -98,8 +125,8 @@ describe("the server-only boundary", () => {
   });
 
   it("never renders a full phone number", () => {
-    // §17 and §23-6: the panel receives `phone_last4` and nothing else, so
-    // there is no field it could render. This catches a component that starts
+    // The panel receives `callerLast4` / `last4` and nothing else, so there
+    // is no field it could render. This catches a component that starts
     // reading one after an API change.
     for (const file of FILES) {
       for (const forbidden of ["phone_enc", "phoneEnc", "fullPhone", "phone_plain"]) {

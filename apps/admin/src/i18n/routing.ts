@@ -1,46 +1,40 @@
-import { defineRouting } from "next-intl/routing";
 import { createNavigation } from "next-intl/navigation";
+import { defineRouting } from "next-intl/routing";
 
 /**
- * The panel's chrome is English. The data is not.
+ * Two UIs, one set of data.
  *
- * Every label, heading, column and button here is English. Everything the
- * panel *displays* stays in whatever language it was written or spoken in:
- * farmer names and villages in Devanagari, product names as the catalogue
- * holds them ("यूरिया", not "urea"), call transcripts in the language of the
- * call, agent prompts and greetings exactly as published. Those are content,
- * and translating them in the view would misrepresent what is in the database
- * and what the farmer actually heard.
+ * The chrome -- labels, headings, buttons -- comes in English and in Hindi,
+ * because the people who run this panel are an ops manager in Lucknow and the
+ * centre managers in the districts, and the second group should not have to
+ * work in English. Everything the panel *displays* stays exactly as the
+ * database holds it: farmer names, transcripts, the scripts the agent speaks.
+ * Those are content, and translating them would misrepresent what the farmer
+ * actually heard.
  *
- * §15 asks for a Hindi UI as well, on the reasoning that a centre manager in
- * Barabanki should not have to work in English. That is not built at the
- * moment by decision rather than by omission -- and `messages/hi.json` is a
- * complete translation, kept precisely so turning it back on is this file
- * plus nothing else:
- *
- *     locales: ["en", "hi"],  defaultLocale: "hi",
- *
- * Dates and numbers are formatted `en-IN` regardless (see `FORMAT_LOCALE`):
- * the language is English, the conventions are Indian, and 1/9/2026 means the
- * first of September to everybody who will read this.
+ * The choice lives in the URL prefix rather than in the session, so a Hindi
+ * link pasted into a chat opens in Hindi for whoever follows it.
  */
 export const routing = defineRouting({
-  locales: ["en"],
+  locales: ["en", "hi"],
   defaultLocale: "en",
   localePrefix: "always",
 });
 
 export type Locale = (typeof routing.locales)[number];
 
+export function isLocale(value: string): value is Locale {
+  return (routing.locales as readonly string[]).includes(value);
+}
+
 /**
- * The locale used for dates, times and numbers -- not for text.
+ * The locale for dates, times and numbers -- not for text -- in both UIs.
  *
  * `en` alone is US English: it renders 1 September 2026 as "9/1/2026", which
  * an operator in Lucknow reads as the ninth of January. `en-IN` gives
  * day-first dates and lakh/crore digit grouping, which is what everybody using
- * this panel expects.
+ * this panel expects whichever language the labels are in.
  */
 export const FORMAT_LOCALE = "en-IN";
 
-export const { Link, redirect, usePathname, useRouter, getPathname } =
-  createNavigation(routing);
+export const { Link, redirect, usePathname, useRouter } = createNavigation(routing);

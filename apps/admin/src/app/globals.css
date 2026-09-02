@@ -2,13 +2,36 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: light dark;
-}
-
-/* §15: dense and legible. A table row that a manager scans forty times an hour
-   should not need a second look to find the outcome column. */
-.grid-dense td,
-.grid-dense th {
-  @apply px-2 py-1 align-top;
+/* The mockups' ground: paper, ink, Plex Sans with Devanagari behind it.
+   Anything marked lang="hi" -- and the whole document when the UI is Hindi --
+   puts the Devanagari face first, because its Latin glyphs are cut to sit on
+   the same line as the matras. */
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  body {
+    @apply bg-paper font-sans text-base text-ink antialiased;
+  }
+  :lang(hi) {
+    font-family: theme("fontFamily.hindi");
+  }
+  a {
+    @apply text-ink;
+  }
+  :focus-visible {
+    @apply outline outline-2 outline-offset-2 outline-ink;
+  }
+  /* Native controls take the palette too, so a date field or a checkbox does
+     not render in the browser's blue. */
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+  input[type="checkbox"] {
+    accent-color: theme("colors.ink");
+  }
 }

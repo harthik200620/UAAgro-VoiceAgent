@@ -37,8 +37,11 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from uaagro_db.models import Call, CallTurn, Farmer, Ticket
-from uaagro_domain.enums import CallOutcome, TicketPriority, TicketStatus, TicketType
+from uaagro_db.models import Call, CallTurn, CampaignContact, Farmer, Ticket
+from uaagro_domain.enums import CallOutcome, ContactStatus, TicketPriority, TicketStatus, TicketType
+from uaagro_domain.livefeed import CAMPAIGN_UPDATED, CONTACT_UPDATED, LiveEvent, LiveFeed
+
+from .contacts import contact_result_from_call, panel_status
 
 log = structlog.get_logger(__name__)
 
@@ -90,6 +93,7 @@ async def run(
     summarise: Summariser | None = None,
     notify: Notifier | None = None,
     upload_recording: Callable[[Call], Awaitable[str | None]] | None = None,
+    live_feed: LiveFeed | None = None,
 ) -> PipelineReport:
     """Run every §11.5 stage for one call.
 
@@ -125,6 +129,9 @@ async def run(
 
     await stage("transcript", lambda: _consolidate_transcript(session, call))
     await stage("outcome", lambda: _set_outcome(session, call))
+    # Right after the outcome, which it reads: the campaign card should turn
+    # green within seconds of the call ending, not after the summary.
+    await stage("campaign", lambda: _finish_campaign_contact(session, call, live_feed))
     # Before the summary: somebody may be waiting on a callback the agent
     # committed to out loud, and a summary nobody has read is worth less.
     await stage("tickets", lambda: _ensure_ticket(session, call))
@@ -192,6 +199,74 @@ async def _set_outcome(session: AsyncSession, call: Call) -> str:
 
     _ = session
     return call.outcome.value
+
+
+async def _finish_campaign_contact(
+    session: AsyncSession, call: Call, live_feed: LiveFeed | None
+) -> str:
+    """Close the loop on the campaign contact this call served (§13.1).
+
+    The media path normally writes the contact's result itself. This is the
+    backstop for the call that ended before the script could decide -- and
+    it is also where the panel is told, because by now the outcome is final.
+    """
+    if call.campaign_id is None:
+        return "not a campaign call"
+
+    contact = await session.scalar(
+        select(CampaignContact).where(CampaignContact.call_id == call.id)
+    )
+    if contact is None:
+        hashes = [h for h in (call.from_number_hash, call.to_number_hash) if h]
+        if hashes:
+            contact = await session.scalar(
+                select(CampaignContact)
+                .where(
+                    CampaignContact.campaign_id == call.campaign_id,
+                    CampaignContact.phone_hash.in_(hashes),
+                )
+                .order_by(CampaignContact.last_attempt_at.desc().nulls_last())
+                .limit(1)
+            )
+    if contact is None:
+        return "no contact for this call"
+
+    contact.call_id = call.id
+    if contact.status is ContactStatus.DIALING or contact.outcome is None:
+        contact.status, contact.outcome = contact_result_from_call(call.outcome)
+    await session.flush()
+
+    if live_feed is not None:
+        farmer = (
+            await session.execute(
+                select(Farmer.full_name, Farmer.phone_last4).where(Farmer.id == contact.farmer_id)
+            )
+        ).first()
+        live_feed.publish(
+            LiveEvent(
+                type=CONTACT_UPDATED,
+                payload={
+                    "id": str(contact.id),
+                    "farmerName": farmer[0] if farmer else None,
+                    "last4": str(farmer[1]) if farmer else "",
+                    "status": panel_status(contact.status),
+                    "outcome": contact.outcome,
+                    "dtmf": contact.dtmf_response,
+                    "callId": str(call.id),
+                    "attempts": contact.attempts,
+                },
+                campaign_id=str(call.campaign_id),
+                call_id=str(call.id),
+            )
+        )
+        live_feed.publish(
+            LiveEvent(
+                type=CAMPAIGN_UPDATED,
+                payload={"id": str(call.campaign_id)},
+                campaign_id=str(call.campaign_id),
+            )
+        )
+    return f"{contact.status.value} ({contact.outcome})"
 
 
 async def _ensure_ticket(session: AsyncSession, call: Call) -> str:

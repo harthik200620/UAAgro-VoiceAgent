@@ -93,6 +93,9 @@ Dial = Callable[[Contact], Awaitable[str]]
 """Places one call and returns the provider SID."""
 
 Recheck = Callable[[Contact], Awaitable[Check | None]]
+#: The panel's pause/stop, read from outside the process: "paused",
+#: "cancelled" or None.
+Control = Callable[[], Awaitable[str | None]]
 """Re-runs the per-contact checks. ``None`` means still eligible."""
 
 
@@ -105,6 +108,11 @@ class Dialer:
     max_concurrent: int = 10
     calls_per_minute: int = 20
     state: DialerState = field(default_factory=DialerState)
+    #: Asked before every dial for an operator's instruction from outside this
+    #: process -- "paused" or "cancelled" from the panel, None to carry on.
+    #: The in-memory state above is what a test drives; this is what a
+    #: running campaign in another container listens to.
+    control: Control | None = None
 
     @property
     def _min_gap_s(self) -> float:
@@ -119,6 +127,8 @@ class Dialer:
         in_flight: list[asyncio.Task[None]] = []
 
         for contact in contacts:
+            if self.control is not None:
+                await self._apply_control()
             if self.state.cancelled:
                 run.stopped_reason = "cancelled"
                 break
@@ -176,6 +186,24 @@ class Dialer:
 
         log.info("dialer.run_complete", summary=run.summary())
         return run
+
+    async def _apply_control(self) -> None:
+        """Read the operator's instruction.
+
+        A control channel that is down is treated as silence: the campaign
+        carries on under the rules it was approved with, which are checked
+        per contact anyway.
+        """
+        assert self.control is not None
+        try:
+            signal = await self.control()
+        except Exception as exc:
+            log.warning("dialer.control_unreachable", error=type(exc).__name__)
+            return
+        if signal == "paused" and not self.state.paused:
+            self.pause("panel")
+        elif signal == "cancelled" and not self.state.cancelled:
+            self.cancel()
 
     def pause(self, reason: str = "operator") -> None:
         self.state.paused = True

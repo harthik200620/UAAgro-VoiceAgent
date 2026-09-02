@@ -68,7 +68,13 @@ fmt:  ## apply formatting and safe fixes
 
 types:  ## mypy --strict across the workspace
 	$(UV) mypy packages/domain/src/uaagro_domain packages/db/src/uaagro_db \
-	           apps/api/src/api apps/voice-worker/src/voice_worker
+	           apps/api/src/api apps/voice-worker/src/voice_worker apps/worker/src/worker
+
+secrets:  ## refuse any key, token or password in the tree (§17); also runs on every commit
+	$(UV) python scripts/secret_scan.py apps packages tests scripts config infra docs .env.example
+
+hooks:  ## install the pre-commit hooks (secret scan, ruff) into this clone
+	$(UV) pre-commit install
 
 test:  ## run the test suite (starts its own embedded Postgres; no Docker needed)
 	$(UV) pytest
@@ -76,7 +82,7 @@ test:  ## run the test suite (starts its own embedded Postgres; no Docker needed
 test-unit:  ## unit tests only, skipping anything that starts a database
 	$(UV) pytest -m "not integration"
 
-check: lint types test  ## everything CI runs
+check: lint types secrets test  ## everything CI runs
 
 ci: check  ## alias used by the pipeline
 

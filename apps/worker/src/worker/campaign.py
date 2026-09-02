@@ -45,9 +45,10 @@ from uaagro_db.campaigns import evaluate_campaign, load_contacts
 from uaagro_db.crypto import get_cipher
 from uaagro_db.models import Campaign, CampaignContact, Farmer
 from uaagro_domain.compliance import CampaignSettings, Check, Contact, first_failure
-from uaagro_domain.enums import AuditAction, CampaignStatus
+from uaagro_domain.enums import AuditAction, CampaignStatus, ContactStatus
+from uaagro_domain.livefeed import CAMPAIGN_UPDATED, CONTACT_UPDATED, LiveEvent, LiveFeed
 
-from .dialer import Dialer, DialerState
+from .dialer import Control, Dialer, DialerState
 
 log = structlog.get_logger(__name__)
 
@@ -80,7 +81,10 @@ class CampaignRunReport:
         )
 
 
-Originate = Callable[[str, str], Awaitable[str]]
+#: ``(farmer number, caller id, custom field)`` -> provider call id. The
+#: custom field names the contact so the media path can find it when the
+#: call connects (see ``voice_worker.runtime.direction``).
+Originate = Callable[[str, str, str], Awaitable[str]]
 """``(to_number, from_number) -> provider call SID``."""
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
@@ -99,14 +103,27 @@ async def run_campaign(
     state: DialerState | None = None,
     max_concurrent: int = 10,
     calls_per_minute: int = 20,
+    live_feed: LiveFeed | None = None,
+    control: Control | None = None,
 ) -> CampaignRunReport:
     """Dial one approved campaign.
 
     ``session_factory`` rather than a session: a campaign runs for an hour, and
     holding one transaction open across it would pin a connection and make
     every per-contact write invisible to the panel until the end.
+
+    ``max_concurrent`` is the deployment's ceiling. The campaign carries its
+    own "calls at a time", set in the panel, and the lower of the two wins:
+    an operator can slow a campaign down, never push it past what the
+    telephony account and the workers were sized for.
     """
     report = CampaignRunReport(campaign_id=campaign_id)
+
+    def announce(event_type: str, payload: dict[str, object]) -> None:
+        if live_feed is not None:
+            live_feed.publish(
+                LiveEvent(type=event_type, payload=payload, campaign_id=str(campaign_id))
+            )
 
     async with session_factory() as session:
         gate, _ = await evaluate_campaign(session, campaign_id)
@@ -136,8 +153,12 @@ async def run_campaign(
             dlt_template_id=campaign.dlt_template_id,
         )
         contacts = await load_contacts(session, campaign)
+        concurrency = max(
+            1, min(max_concurrent, campaign.max_concurrent_calls or max_concurrent)
+        )
         await _mark(session, campaign_id, CampaignStatus.RUNNING)
         await session.commit()
+    announce(CAMPAIGN_UPDATED, {"id": str(campaign_id), "status": CampaignStatus.RUNNING.value})
 
     async def recheck(contact: Contact) -> Check | None:
         """Re-run the per-contact checks against fresh rows.
@@ -160,16 +181,25 @@ async def run_campaign(
             # Recorded before the call. A crash between here and the provider's
             # response leaves a contact marked attempted, which costs one
             # missed call; the other order costs a duplicate.
-            await _record_attempt(db, campaign_id, contact.farmer_id)
+            attempt = await _record_attempt(db, campaign_id, contact.farmer_id)
             await db.commit()
-        return await originate(number, caller_id)
+        announce(CONTACT_UPDATED, attempt.card("in_call", None))
+        try:
+            return await originate(number, caller_id, f"contact:{attempt.contact_id}")
+        except Exception:
+            async with session_factory() as db:
+                await _attempt_failed(db, attempt.contact_id)
+                await db.commit()
+            announce(CONTACT_UPDATED, attempt.card("no_answer", "failed"))
+            raise
 
     dialer = Dialer(
         dial=dial,
         recheck=recheck,
-        max_concurrent=max_concurrent,
+        max_concurrent=concurrency,
         calls_per_minute=calls_per_minute,
         state=state or DialerState(),
+        control=control,
     )
     run = await dialer.run(campaign_id, contacts)
 
@@ -188,6 +218,7 @@ async def run_campaign(
         )
         await _mark(session, campaign_id, final)
         await session.commit()
+    announce(CAMPAIGN_UPDATED, {"id": str(campaign_id), "status": final.value})
 
     log.info("campaign.run_complete", summary=report.summary())
     return report
@@ -275,19 +306,77 @@ async def _plaintext_number(
     return number
 
 
+@dataclass(frozen=True, slots=True)
+class _Attempt:
+    """What the panel needs to paint the contact's card."""
+
+    contact_id: uuid.UUID
+    farmer_name: str | None
+    last4: str
+    attempts: int
+
+    def card(self, status: str, outcome: str | None) -> dict[str, object]:
+        return {
+            "id": str(self.contact_id),
+            "farmerName": self.farmer_name,
+            "last4": self.last4,
+            "status": status,
+            "outcome": outcome,
+            "dtmf": None,
+            "callId": None,
+            "attempts": self.attempts,
+        }
+
+
 async def _record_attempt(
     session: AsyncSession, campaign_id: uuid.UUID, farmer_id: uuid.UUID
-) -> None:
-    await session.execute(
-        update(CampaignContact)
-        .where(
-            CampaignContact.campaign_id == campaign_id,
-            CampaignContact.farmer_id == farmer_id,
+) -> _Attempt:
+    """Count the attempt and mark the contact as being dialled.
+
+    The status matters beyond bookkeeping: it is how the media path finds
+    the contact when a provider drops the custom field, and it is what the
+    reconciliation job uses to spot a call that never connected.
+    """
+    row = (
+        await session.execute(
+            select(CampaignContact.id, Farmer.full_name, Farmer.phone_last4)
+            .join(Farmer, Farmer.id == CampaignContact.farmer_id)
+            .where(
+                CampaignContact.campaign_id == campaign_id,
+                CampaignContact.farmer_id == farmer_id,
+            )
         )
+    ).first()
+    if row is None:
+        raise PermissionError(f"farmer {farmer_id} is not a contact of campaign {campaign_id}")
+    contact_id, farmer_name, last4 = row
+    attempts = await session.scalar(
+        update(CampaignContact)
+        .where(CampaignContact.id == contact_id)
         .values(
             attempts=CampaignContact.attempts + 1,
             last_attempt_at=datetime.now(UTC),
+            status=ContactStatus.DIALING,
+            outcome=None,
+            dtmf_response=None,
+            call_id=None,
         )
+        .returning(CampaignContact.attempts)
+    )
+    return _Attempt(
+        contact_id=contact_id,
+        farmer_name=farmer_name,
+        last4=str(last4),
+        attempts=int(attempts or 0),
+    )
+
+
+async def _attempt_failed(session: AsyncSession, contact_id: uuid.UUID) -> None:
+    """The provider refused the dial. Not a no-answer: nothing rang."""
+    await session.execute(
+        update(CampaignContact)
+        .where(CampaignContact.id == contact_id)
+        .values(status=ContactStatus.FAILED, outcome="failed")
     )
 
 

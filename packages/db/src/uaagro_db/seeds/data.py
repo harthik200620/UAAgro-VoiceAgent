@@ -1881,7 +1881,7 @@ USERS: tuple[UserSeed, ...] = (
 #: ``APP_ENV`` is staging or production.
 
 # and the loader refuses to run when APP_ENV is staging or production.
-DEFAULT_SEED_PASSWORD = "DevOnly!Passw0rd"  # noqa: S105
+DEFAULT_SEED_PASSWORD = "DevOnly!Passw0rd"  # noqa: S105 -- not-a-secret: dev seed only
 
 
 # --------------------------------------------------------------------------- #

@@ -130,6 +130,9 @@ async def test_the_pipeline_runs_every_stage(sessions, call_id) -> None:  # type
     assert names == [
         "transcript",
         "outcome",
+        # Closes the campaign contact behind an outbound call (§13.1); a no-op
+        # for an inbound one, but it still runs and still reports.
+        "campaign",
         "tickets",
         "recording",
         "cost",

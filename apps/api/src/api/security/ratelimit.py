@@ -45,12 +45,21 @@ EXPORT_LIMIT = Limit(requests=5, window_seconds=3600)
 DEFAULT_LIMIT = Limit(requests=600, window_seconds=60)
 
 
+REDIS_CONNECT_TIMEOUT_S = 3.0
+REDIS_SOCKET_TIMEOUT_S = 5.0
+
+
 @lru_cache(maxsize=1)
 def get_redis() -> redis.Redis:
     # redis-py ships no type information, so the untyped constructor is
     # narrowed here rather than by relaxing mypy across the package.
     client: redis.Redis = redis.from_url(  # type: ignore[no-untyped-call]
-        get_settings().redis_url, decode_responses=True
+        get_settings().redis_url,
+        decode_responses=True,
+        # A Redis that stops answering must not hold every request open:
+        # the limiter fails open on an error, and it should get one quickly.
+        socket_connect_timeout=REDIS_CONNECT_TIMEOUT_S,
+        socket_timeout=REDIS_SOCKET_TIMEOUT_S,
     )
     return client
 

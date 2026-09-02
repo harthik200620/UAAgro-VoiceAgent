@@ -31,9 +31,11 @@ out/
 .turbo/
 *.tsbuildinfo
 
-# local data -- recordings and audio caches never enter git
-data/
-recordings/
+# local data -- recordings and audio caches never enter git. Anchored to the
+# repository root: a source directory called data/ (the panel's Data page)
+# must not vanish from commits.
+/data/
+/recordings/
 models/
 fixtures/audio/*.wav
 !fixtures/audio/.gitkeep

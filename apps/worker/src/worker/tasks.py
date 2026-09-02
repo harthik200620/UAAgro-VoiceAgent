@@ -31,11 +31,34 @@ from arq.connections import RedisSettings
 
 from uaagro_domain.compliance import within_calling_window
 from uaagro_domain.eventloop import install_fast_event_loop
+from uaagro_domain.livefeed import CONTACT_UPDATED, LiveEvent, LiveFeed, RedisLiveFeed
 from uaagro_domain.settings import get_defaults, get_settings
 from uaagro_domain.telemetry import INSTRUMENTS
 from uaagro_domain.timezone import now_ist
 
 log = structlog.get_logger(__name__)
+
+#: One publisher per worker process, made on first use so importing this
+#: module never opens a socket.
+_live_feed: LiveFeed | None = None
+
+
+def live_feed() -> LiveFeed:
+    global _live_feed
+    if _live_feed is None:
+        _live_feed = RedisLiveFeed(get_settings().redis_url)
+    return _live_feed
+
+
+def campaign_control_key(campaign_id: str | uuid.UUID) -> str:
+    """Where the panel's pause/stop instruction for a campaign lives in Redis."""
+    return f"campaign:{campaign_id}:control"
+
+
+#: A contact marked as being dialled this long ago with no live call behind
+#: it never connected. Longer than the provider's ring timeout plus a short
+#: call, shorter than the retry gap.
+DIAL_STALE_AFTER = timedelta(minutes=3)
 
 
 # --------------------------------------------------------------------------- #
@@ -53,7 +76,7 @@ async def process_call(ctx: dict[str, Any], call_id: str) -> str:
     # and an unbound session sees no rows at all -- this job would report "call
     # not found" for every call it was handed.
     async with system_session() as session:
-        report = await run(session, uuid.UUID(call_id))
+        report = await run(session, uuid.UUID(call_id), live_feed=live_feed())
 
     if report.failed:
         # Raised so ARQ retries. The stages that succeeded have already
@@ -75,7 +98,7 @@ async def dial_campaign(ctx: dict[str, Any], campaign_id: str) -> str:
     from .campaign import CampaignBlocked, run_campaign
     settings = get_settings()
 
-    async def originate(to_number: str, from_number: str) -> str:
+    async def originate(to_number: str, from_number: str, custom_field: str) -> str:
         from voice_worker.adapters.telephony.control import build_adapter
 
         # The approved set is the number we just decrypted from this campaign's
@@ -86,7 +109,22 @@ async def dial_campaign(ctx: dict[str, Any], campaign_id: str) -> str:
             to=to_number,
             from_=from_number,
             callback_url=f"{settings.public_base_url}/ws/voice",
+            custom_field=custom_field,
         )
+
+    # The panel's pause and stop buttons write this key; the dialer reads it
+    # before every dial. A key rather than a message so a campaign that was
+    # paused while the worker restarted stays paused.
+    redis = ctx.get("redis")
+    control_key = campaign_control_key(campaign_id)
+
+    async def control() -> str | None:
+        if redis is None:
+            return None
+        value = await redis.get(control_key)
+        if value is None:
+            return None
+        return value.decode() if isinstance(value, bytes) else str(value)
 
     try:
         report = await run_campaign(
@@ -95,6 +133,8 @@ async def dial_campaign(ctx: dict[str, Any], campaign_id: str) -> str:
             originate=originate,
             max_concurrent=settings.max_concurrent_calls,
             calls_per_minute=settings.outbound_calls_per_minute,
+            live_feed=live_feed(),
+            control=control,
         )
     except CampaignBlocked as blocked:
         # Logged and swallowed rather than raised: ARQ would retry a raised
@@ -229,6 +269,102 @@ async def verify_audit_chain(ctx: dict[str, Any]) -> str:
     return ""
 
 
+async def reconcile_contacts(ctx: dict[str, Any]) -> str:
+    """Resolve dials that never became calls (§13.3).
+
+    The dialer marks a contact as being dialled and hands the number to the
+    provider. If nobody answers, no media stream opens, no call row is
+    written and nothing else would ever touch the contact: its card would
+    stay amber forever and the retry policy would never see it. Every two
+    minutes this finds those, records the no-answer, schedules the retry and
+    tells the panel.
+    """
+    from sqlalchemy import select
+
+    from uaagro_db.engine import system_session
+    from uaagro_db.models import Call, CampaignContact, Farmer
+    from uaagro_domain.enums import CallStatus, ContactStatus
+
+    from .contacts import contact_result_from_call, panel_status
+    from .dialer import schedule_retry
+
+    stale_before = datetime.now(UTC) - DIAL_STALE_AFTER
+    resolved = 0
+    async with system_session() as session:
+        rows = (
+            await session.execute(
+                select(
+                    CampaignContact,
+                    Call.status,
+                    Call.outcome,
+                    Farmer.full_name,
+                    Farmer.phone_last4,
+                )
+                .join(Farmer, Farmer.id == CampaignContact.farmer_id)
+                .outerjoin(Call, Call.id == CampaignContact.call_id)
+                .where(
+                    CampaignContact.status == ContactStatus.DIALING,
+                    CampaignContact.last_attempt_at < stale_before,
+                )
+            )
+        ).all()
+        for contact, call_status, call_outcome, farmer_name, last4 in rows:
+            if call_status is CallStatus.IN_PROGRESS:
+                continue  # a long conversation, not a stale dial
+            if call_status is not None:
+                contact.status, contact.outcome = contact_result_from_call(call_outcome)
+            else:
+                contact.status, contact.outcome = ContactStatus.NO_ANSWER, "no_answer"
+                if contact.last_attempt_at is not None:
+                    contact.next_attempt_at = schedule_retry(
+                        "no_answer",
+                        last_attempt=contact.last_attempt_at,
+                        attempts=contact.attempts,
+                    )
+            resolved += 1
+            live_feed().publish(
+                LiveEvent(
+                    type=CONTACT_UPDATED,
+                    payload={
+                        "id": str(contact.id),
+                        "farmerName": farmer_name,
+                        "last4": str(last4),
+                        "status": panel_status(contact.status),
+                        "outcome": contact.outcome,
+                        "dtmf": contact.dtmf_response,
+                        "callId": str(contact.call_id) if contact.call_id else None,
+                        "attempts": contact.attempts,
+                    },
+                    campaign_id=str(contact.campaign_id),
+                )
+            )
+        await session.commit()
+
+    if resolved:
+        log.info("contacts.reconciled", resolved=resolved)
+        return f"resolved {resolved}"
+    return ""
+
+
+async def ingest_document(ctx: dict[str, Any], document_id: str) -> str:
+    """Extract, chunk, embed and publish one panel upload (§9, §15.1).
+
+    The row already exists with ``ingest_status='pending'``; this fills it.
+    Failures are written to the row rather than raised: an operator reading
+    "The PDF contains no readable text" fixes it, one reading a retry
+    counter does not -- and ARQ retrying a scan three times would not make
+    it readable.
+    """
+    from uaagro_db.engine import system_session
+
+    from .ingest import ingest_pending_document
+
+    async with system_session() as session:
+        outcome = await ingest_pending_document(session, uuid.UUID(document_id))
+        await session.commit()
+    return outcome
+
+
 async def refresh_embeddings(ctx: dict[str, Any]) -> str:
     """Re-embed knowledge chunks that have no vector (§9).
 
@@ -283,11 +419,16 @@ class WorkerSettings:
         expire_retention,
         verify_audit_chain,
         refresh_embeddings,
+        reconcile_contacts,
+        ingest_document,
     ]
 
     cron_jobs = [  # noqa: RUF012
         # Daily, not monthly. See roll_partitions.
         cron(roll_partitions, hour=2, minute=0),
+        # Every two minutes: a dial that never connected should turn its card
+        # red before the operator wonders why it is still amber.
+        cron(reconcile_contacts, minute=set(range(0, 60, 2))),
         # Before the calling window opens, so a campaign starting at 09:00 has
         # a scrub from this morning rather than yesterday.
         cron(scrub_dnd, hour=7, minute=0),

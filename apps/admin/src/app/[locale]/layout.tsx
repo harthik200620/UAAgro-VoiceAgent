@@ -3,23 +3,24 @@ import { NextIntlClientProvider } from "next-intl";
 import { getMessages, setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
 
-import { routing, type Locale } from "@/i18n/routing";
-import { Nav } from "@/components/nav";
-import { currentSession } from "@/server/session";
+import { fontVariables } from "@/app/fonts";
+import { isLocale } from "@/i18n/routing";
+
 import "../globals.css";
 
 export const metadata: Metadata = {
-  title: "UA Agro — नवीन खुशहाली किसान सेवा केंद्र",
-  description: "Operations panel",
-  // §15: an operations tool, not a marketing site. Nothing here should be
-  // indexed, previewed or shared.
+  title: "UA Agro — किसान सेवा केंद्र",
+  description: "Control room for the UA Agro farmer helpline",
+  // An operations tool, not a marketing site. Nothing here should be indexed,
+  // previewed or shared.
   robots: { index: false, follow: false },
 };
 
-export function generateStaticParams() {
-  return routing.locales.map((locale) => ({ locale }));
-}
-
+/**
+ * The document: fonts, language, and the translation catalogue for Client
+ * Components. The sidebar shell lives one level down in `(panel)` so the
+ * sign-in screen can stand alone.
+ */
 export default async function LocaleLayout({
   children,
   params,
@@ -28,23 +29,15 @@ export default async function LocaleLayout({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  if (!routing.locales.includes(locale as Locale)) notFound();
+  if (!isLocale(locale)) notFound();
   setRequestLocale(locale);
-
   const messages = await getMessages();
-  const session = await currentSession();
 
   return (
-    <html lang={locale} suppressHydrationWarning>
-      <body className="bg-white text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
-        <NextIntlClientProvider messages={messages}>
-          <div className="flex min-h-screen flex-col md:flex-row">
-            {/* Nav takes the session so it can hide controls the user cannot
-                use. That is presentation only -- every capability is checked
-                again on the server (see lib/rbac). */}
-            <Nav session={session} />
-            <main className="min-w-0 flex-1 p-4 md:p-6">{children}</main>
-          </div>
+    <html lang={locale} className={fontVariables}>
+      <body>
+        <NextIntlClientProvider locale={locale} messages={messages}>
+          {children}
         </NextIntlClientProvider>
       </body>
     </html>

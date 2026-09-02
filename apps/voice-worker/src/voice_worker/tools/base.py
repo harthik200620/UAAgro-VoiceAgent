@@ -60,6 +60,11 @@ class ToolContext:
     organization_id: str | None = None
 
 
+#: Result fields the loop needs but neither the model nor the call record
+#: should see: a hand-over destination is a phone number (§17, §23-6).
+_NOT_FOR_THE_RECORD = frozenset({"target_number"})
+
+
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     """What a tool returned, and how long it took."""
@@ -89,8 +94,9 @@ class ToolResult:
             "ok": self.ok,
             "latency_ms": round(self.latency_ms, 1),
         }
-        if self.data:
-            payload["data"] = self.data
+        data = {key: value for key, value in self.data.items() if key not in _NOT_FOR_THE_RECORD}
+        if data:
+            payload["data"] = data
         if self.error:
             payload["error"] = self.error
         if self.timed_out:
@@ -450,7 +456,6 @@ class ToolRegistry:
         timeout, that is roughly the first ``pool_size`` callers after a deploy
         being told the lookup is taking too long, rather than just the first.
         """
-
 
         depth = connections if connections is not None else _pool_size()
 

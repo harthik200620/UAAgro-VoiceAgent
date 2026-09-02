@@ -28,8 +28,21 @@ from uaagro_domain.logging import configure_logging
 from uaagro_domain.settings import get_defaults, get_settings
 from uaagro_domain.telemetry import INSTRUMENTS
 
-from .routers import admin, auth, health
+from .routers import (
+    admin,
+    auth,
+    health,
+    panel_calls,
+    panel_campaigns,
+    panel_centres,
+    panel_data,
+    panel_flows,
+    panel_knowledge,
+    panel_live,
+)
 from .security.ratelimit import close_redis
+from .services.jobs import close_jobs
+from .services.worker_client import close_worker_client
 
 log = structlog.get_logger(__name__)
 
@@ -68,6 +81,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await close_worker_client()
+        await close_jobs()
         await close_redis()
         await dispose_engines()
         log.info("api.stopped")
@@ -159,6 +174,18 @@ async def database_error_handler(_: Request, exc: SQLAlchemyError) -> JSONRespon
 
 app.include_router(health.router)
 app.include_router(auth.router)
+# The panel's routers before the general admin surface, so a specific path
+# such as `/admin/calls/{id}/recording` is matched before `/admin/calls`.
+for panel in (
+    panel_live,
+    panel_calls,
+    panel_campaigns,
+    panel_flows,
+    panel_knowledge,
+    panel_centres,
+    panel_data,
+):
+    app.include_router(panel.router)
 app.include_router(admin.router)
 
 app.include_router(_metrics_router)

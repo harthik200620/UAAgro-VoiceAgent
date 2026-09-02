@@ -1180,3 +1180,85 @@ dimension §1 N1 cares most about becomes the least reliable one.
   round trip per turn spends §7's budget on analytics. It returns the intent to
   the conversation loop, which persists it with the turn it belongs to. The tool
   is honest about this; the write lands in Phase 4 with the turn record.
+
+## The operations panel, and what it forced into the media path
+
+The panel was rebuilt to six sections -- Live, Calls, Outbound, Inbound, Flows,
+Data -- against a written contract, `docs/ADMIN_API.md`. Building it exposed
+three things the media path had never done, each of the "built but never
+wired" shape this document keeps recording.
+
+**Turns were never persisted.** `call_turns` existed from the first migration
+and nothing wrote to it. The post-call pipeline "consolidated" an empty table
+and the transcript lived only in the worker's memory. The conversation
+pipeline now reports every finished turn to the session (`on_turn`), which
+writes the farmer's half and the agent's half as two rows -- the agent's
+carrying the §7 latency breakdown -- off the audio path through the same drain
+queue that persists events.
+
+**The outbound script was never spoken.** `OutboundAgent` had tests and no
+caller; every call, placed or received, ran the inbound LLM agent. The session
+now decides the direction from the provider's start frame
+(`runtime/direction.py`: the dialer's custom field first, our own numbers
+second) and the assembly builds an `OutboundResponder` in place of the LLM
+agent. The responder walks the panel-edited script; the LLM agent stands
+behind it to answer questions the farmer asks (press two, or anything that is
+not a yes, a no or an opt-out), then the script resumes. A "no" is accepted
+the first time. Opt-out writes `internal_dnc` before the confirmation is
+spoken. When the closing line has played, the session ends the call itself.
+
+**There was no live channel out of the media path.** The Live page needs the
+transcript as it happens. `uaagro_domain.livefeed` publishes call, turn,
+keypress and end events through a bounded in-process queue to a Redis channel;
+the API relays them over server-sent events, filtered to the caller's centres,
+after sending a database snapshot. Publishing never blocks the audio loop: a
+full queue drops and counts. The dialer and the post-call pipeline publish
+contact and campaign events on the same channel, which is what turns a card
+amber and then green.
+
+Two smaller findings from the same work: the dense half of retrieval was never
+loaded in the worker (the registry got a retriever with no embedder, so every
+production search was BM25-only and said so); it now loads in the background
+at start. And promotional campaigns need a DLT template id the settings did
+not carry; `DLT_TEMPLATE_ID` joins `DLT_ENTITY_ID`, and the gate refuses a
+campaign until both are set, which the panel names.
+
+The knowledge base grew an ingestion path from the panel: upload or website
+address, stored in the bucket, extracted (`knowledge/extract.py`: PDF, Word,
+CSV, text, a bounded same-site crawl), chunked and embedded by the background
+worker, with the document row as the progress report.
+
+## The hand-over, and what was missing from it
+
+Until 2 September 2026 the escalation engine decided that a caller needed a
+person, the transfer tool decided which person, and nothing joined the two:
+the caller heard "मैं आपको जोड़ रहा हूँ" and then silence, because no code path
+reached the provider's call control, `calls.was_transferred` was never set,
+and the panel's "handed to a person" count could only ever read zero. The
+pieces existed; the seam between them did not.
+
+The seam is three small parts, each testable alone (`tests/test_transfer.py`):
+
+- **The agent asks the tool who takes the call.** An immediate escalation
+  (§12.1) and the safety script (§16.1) now run `transfer_to_human` before
+  the line is spoken, so the caller hears the tool's own line -- which names
+  the centre -- rather than a placeholder. The tool's answer rides on the
+  turn as a `TransferRequest`; when nobody is reachable the caller hears a
+  callback commitment instead (§12.3-6) and the turn carries no request.
+- **The pipeline waits for the line.** `ConversationPipeline.on_transfer`
+  fires only after the transfer line has been played (§12.3-1), with the
+  request. A pipeline also has `announce()` for a line that answers nothing:
+  the fallback spoken when the provider refuses.
+- **The session owns the phone line.** `CallSession._on_transfer` builds
+  call control for exactly one approved destination (§17), asks the provider
+  to transfer with the whisper, marks the call transferred with
+  `transfer_completed` true, publishes `call.transfer` for the Live page and
+  sets the outcome. A refusal marks the call transferred-but-not-completed,
+  which is the condition the post-call job already treats as "open the
+  follow-up", and the caller hears the commitment.
+
+The destination number never enters the model context or `call_turns`:
+`ToolResult.to_dict` drops `target_number` before either sees it. Whether
+Exotel accepts the transfer request as written is a Phase 5 item -- the
+shape is from the published API and a real hand-over is the check
+(`docs/VERIFICATION.md`, step 3).

@@ -18,6 +18,7 @@ dependencies = [
     # and §18's calling window and §12.3's working-hours check are both written
     # in IST. See uaagro_domain.timezone.
     "tzdata>=2024.1",
+    "redis>=5.2",
 ]
 
 [build-system]

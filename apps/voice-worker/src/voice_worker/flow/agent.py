@@ -35,7 +35,7 @@ from uaagro_domain.enums import Intent, TransferReason
 from ..text.speech import SentenceBuffer
 from ..tools.base import ToolContext, ToolRegistry, ToolResult
 from .context import CallerContext, ContextBuilder, ConversationMemory, DynamicHint
-from .escalation import EscalationDecision, EscalationEngine, TurnSignals
+from .escalation import EscalationDecision, EscalationEngine, TransferRequest, TurnSignals
 from .intents import classify_by_rule, reconcile
 from .safety import SafetyVerdict, combine
 from .safety import detect as detect_safety
@@ -54,6 +54,13 @@ log = structlog.get_logger(__name__)
 #: because the moment it is needed is the moment synthesis is least reliable.
 HOLD_PHRASE_KEY = "hold.one_moment.hi"
 HOLD_SCRIPT_HI = "जी, एक क्षण रुकिए, मैं देख रहा हूँ।"
+#: Spoken before an immediate hand-over when no transfer tool is wired.
+TRANSFER_PLACEHOLDER_HI = "जी, मैं आपको हमारे साथी से जोड़ रहा हूँ। एक क्षण रुकिए।"
+#: §12.3-6: what the caller hears when nobody can take the call right now.
+CALLBACK_COMMITMENT_HI = (
+    "जी, अभी हमारे साथी से बात नहीं हो पा रही है। "
+    "मैंने आपकी बात दर्ज कर ली है, केंद्र से आपको चौबीस घंटे के अंदर फ़ोन आएगा।"
+)
 
 
 @dataclass
@@ -133,17 +140,13 @@ class Agent:
     caller: CallerContext | None = None
     hint: DynamicHint | None = None
     flow: CallFlow = field(default_factory=CallFlow)
-    tool_context: ToolContext = field(
-        default_factory=lambda: ToolContext(call_id="unknown")
-    )
+    tool_context: ToolContext = field(default_factory=lambda: ToolContext(call_id="unknown"))
     #: The most recent finished turn. `respond` streams text and cannot return
     #: a result, so the escalation decision and validation outcome are left
     #: here for whatever needs them after the words have gone out.
     last_turn: TurnResult | None = field(default=None, repr=False)
 
-    async def handle(
-        self, transcript: str, *, asr_confidence: float | None = None
-    ) -> TurnResult:
+    async def handle(self, transcript: str, *, asr_confidence: float | None = None) -> TurnResult:
         """Run one turn end to end, answering only when the whole reply is in.
 
         The streaming counterpart is :meth:`respond`. Both share
@@ -180,20 +183,20 @@ class Agent:
             # §16.1: abandon all other logic. No intent classification, no tool
             # call, no generation -- the script is fixed and the transfer is
             # already decided.
-            return self._safety_turn(safety), None
+            self.last_turn = await self._with_transfer(self._safety_turn(safety))
+            return self.last_turn, None
 
         intent = await self._classify(transcript)
 
-        signals = TurnSignals(
-            text=transcript, intent=intent, asr_confidence=asr_confidence
-        )
+        signals = TurnSignals(text=transcript, intent=intent, asr_confidence=asr_confidence)
         repeated = self.flow.intent_attempts.get(intent, 0) >= 1
         decision = self.escalation.evaluate(signals, repeated_intent=repeated)
 
         if decision.escalate and decision.immediate:
             # §12.1: no further agent turns. Generating first and discarding
             # would spend the turn's latency proving the transfer was right.
-            return self._immediate_escalation_turn(intent, decision), None
+            self.last_turn = await self._immediate_escalation_turn(intent, decision)
+            return self.last_turn, None
 
         results = await self._run_tools(intent, transcript)
 
@@ -247,9 +250,7 @@ class Agent:
 
         self.memory.add("assistant", text)
         resolved = validation.ok and bool(prepared.results) and not decision.escalate
-        confident = (
-            prepared.asr_confidence is None or prepared.asr_confidence >= 0.55
-        )
+        confident = prepared.asr_confidence is None or prepared.asr_confidence >= 0.55
         self.flow.record_turn(prepared.intent, confident=confident, resolved=resolved)
 
         self.last_turn = TurnResult(
@@ -319,9 +320,7 @@ class Agent:
         for _ in range(2):
             # The retry is told what was wrong. A bare "try again" regenerates
             # the same class of output, and only one retry is available.
-            message = (
-                transcript if feedback is None else f"{transcript}\n\n[सुधार: {feedback}]"
-            )
+            message = transcript if feedback is None else f"{transcript}\n\n[सुधार: {feedback}]"
             built = self.context_builder.build(
                 transcript=message,
                 caller=self.caller,
@@ -331,9 +330,7 @@ class Agent:
                 intent=intent,
             )
             text = await self._collect(built, max_tokens=_token_budget(is_dosage))
-            outcome = self.validator.validate(
-                text, tool_results=trimmed, is_dosage=is_dosage
-            )
+            outcome = self.validator.validate(text, tool_results=trimmed, is_dosage=is_dosage)
             if outcome.ok:
                 return text, outcome, False
             feedback = "; ".join(str(v) for v in outcome.violations)
@@ -370,39 +367,82 @@ class Agent:
             text=SAFETY_SCRIPT_HI,
             intent=Intent.SAFETY_EMERGENCY,
             safety=verdict,
-            escalation=self.escalation.evaluate(
-                TurnSignals(intent=Intent.SAFETY_EMERGENCY)
-            ),
+            escalation=self.escalation.evaluate(TurnSignals(intent=Intent.SAFETY_EMERGENCY)),
             cached=True,
             ends_agent_turns=True,
         )
 
-    def _immediate_escalation_turn(
+    async def _immediate_escalation_turn(
         self, intent: Intent, decision: EscalationDecision
     ) -> TurnResult:
         # §12.3-1: the caller is told before anything happens. The line itself
         # comes from the transfer tool, which knows who they are being joined
-        # to; this is the placeholder the loop replaces.
-        text = "जी, मैं आपको हमारे साथी से जोड़ रहा हूँ। एक क्षण रुकिए।"
-        self.memory.add("assistant", text)
-        if self.flow.can(CallState.ESCALATE):
-            self.flow.to(
-                CallState.ESCALATE,
-                reason=decision.reason.value if decision.reason else None,
-            )
-        return TurnResult(
-            text=text,
+        # to; the placeholder is spoken only when no tool is wired.
+        turn = TurnResult(
+            text=TRANSFER_PLACEHOLDER_HI,
             intent=intent,
             escalation=decision,
             cached=True,
             ends_agent_turns=True,
         )
+        turn = await self._with_transfer(turn, replace_line=True)
+        self.memory.add("assistant", turn.text)
+        if self.flow.can(CallState.ESCALATE):
+            self.flow.to(
+                CallState.ESCALATE,
+                reason=decision.reason.value if decision.reason else None,
+            )
+        return turn
+
+    async def _with_transfer(self, turn: TurnResult, *, replace_line: bool = False) -> TurnResult:
+        """Ask the transfer tool who takes the call, so the loop can join them.
+
+        The escalation engine decides *that* a person is needed; the tool
+        decides *who* (§12.3: the centre's chain, its hours, the daily cap) and
+        writes the line the caller hears first. Its result rides on the turn,
+        where :attr:`pending_transfer` finds it after the line has been spoken.
+        With ``replace_line`` the tool's line replaces the placeholder; the
+        safety script keeps its own words either way.
+        """
+        decision = turn.escalation
+        if decision is None or not decision.escalate:
+            return turn
+        if self.registry.get("transfer_to_human") is None:
+            return turn
+        reason = decision.reason or TransferReason.EXPLICIT_REQUEST
+        result = await self.registry.execute(
+            "transfer_to_human",
+            {"reason": reason.value, "urgency": decision.urgency.value},
+            self.tool_context,
+        )
+        turn.tool_results = [*turn.tool_results, result]
+        if not replace_line:
+            return turn
+        request = TransferRequest.from_tool_result(result.data) if result.ok else None
+        if request is not None and request.say_first:
+            turn.text = request.say_first
+        elif result.ok:
+            # §12.3-6: nobody reachable becomes a commitment, never "call back
+            # later". The post-call job opens the ticket from the escalation.
+            turn.text = CALLBACK_COMMITMENT_HI
+        return turn
+
+    @property
+    def pending_transfer(self) -> TransferRequest | None:
+        """The hand-over the last turn prepared, for the loop to carry out."""
+        last = self.last_turn
+        if last is None:
+            return None
+        for result in last.tool_results:
+            if result.tool == "transfer_to_human" and result.ok:
+                request = TransferRequest.from_tool_result(result.data)
+                if request is not None:
+                    return request
+        return None
 
     # -- Responder protocol -------------------------------------------------- #
 
-    async def respond(
-        self, transcript: str, *, language: str = "hi-IN"
-    ) -> AsyncIterator[str]:
+    async def respond(self, transcript: str, *, language: str = "hi-IN") -> AsyncIterator[str]:
         """The ``Responder`` seam the pipeline takes, one sentence at a time.
 
         Waiting for the complete answer before speaking any of it costs the
@@ -480,9 +520,7 @@ class Agent:
                 # §11.3's word cap is the one rule that is cumulative, and a
                 # per-sentence check would let five short sentences past it.
                 candidate = " ".join([*spoken, sentence]).strip()
-                outcome = self.validator.validate(
-                    candidate, tool_results=trimmed, is_dosage=False
-                )
+                outcome = self.validator.validate(candidate, tool_results=trimmed, is_dosage=False)
 
                 if outcome.ok:
                     spoken.append(sentence)

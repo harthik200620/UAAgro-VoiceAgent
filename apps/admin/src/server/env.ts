@@ -27,8 +27,6 @@ export type Env = {
   apiBaseUrl: string;
   /** Signs the session cookie. Never sent anywhere. */
   sessionSecret: string;
-  /** Where the browser reaches the realtime stream. Public by nature. */
-  realtimeUrl: string;
 };
 
 function required(name: string): string {
@@ -48,11 +46,6 @@ export function env(): Env {
   return {
     apiBaseUrl: required("API_BASE_URL"),
     sessionSecret: required("ADMIN_SESSION_SECRET"),
-    // Not a secret: the browser has to know where to connect. Named without the
-    // NEXT_PUBLIC_ prefix anyway and passed down as a prop, so the rule "nothing
-    // in this file is public" stays absolute and needs no exceptions to reason
-    // about.
-    realtimeUrl: process.env.REALTIME_URL ?? "ws://localhost:8000/ws/admin",
   };
 }
 

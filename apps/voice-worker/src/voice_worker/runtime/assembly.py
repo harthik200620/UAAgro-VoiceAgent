@@ -34,15 +34,25 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from uaagro_db.models import AgentConfig, Farmer
-from uaagro_domain.enums import FlowType
+from uaagro_db.engine import incall_session
+from uaagro_db.models import AgentConfig, Campaign, CampaignContact, Centre, DndStatus, Farmer
+from uaagro_domain.enums import (
+    CallDirection,
+    CallOutcome,
+    CallStatus,
+    CampaignStatus,
+    ContactStatus,
+    FlowType,
+)
 from uaagro_domain.errors import ConfigurationError
+from uaagro_domain.livefeed import CONTACT_UPDATED, LiveEvent, LiveFeed
 from uaagro_domain.settings import Defaults, Settings
 
 from ..adapters.factory import SpeechStack, build_speech_stack
@@ -52,6 +62,8 @@ from ..flow.context import CallerContext, ContextBuilder, DynamicHint
 from ..flow.escalation import EscalationEngine
 from ..flow.state import CallFlow
 from ..flow.validator import OutputValidator
+from ..outbound.responder import OutboundResponder
+from ..outbound.script import OutboundScript
 from ..pipelines.conversation import ConversationPipeline
 from ..runtime.audio_cache import AudioCache
 from ..runtime.playback import BargeInPolicy, PacedSender
@@ -90,6 +102,8 @@ class AgentSettings:
     llm_settings: dict[str, Any] = field(default_factory=dict)
     tts_settings: dict[str, Any] = field(default_factory=dict)
     guardrails: dict[str, Any] = field(default_factory=dict)
+    #: The panel-edited script (§13.2). Empty for inbound flows.
+    script: dict[str, Any] = field(default_factory=dict)
 
 
 async def load_agent_settings(
@@ -97,21 +111,38 @@ async def load_agent_settings(
     *,
     organization_id: uuid.UUID,
     flow_type: FlowType = FlowType.INBOUND,
+    config_id: uuid.UUID | None = None,
 ) -> AgentSettings:
     """The published config for this flow (§15 Flows & Prompts).
 
     A partial unique index makes "exactly one published version" a database
     guarantee, so this is a single row by construction rather than by
     ``ORDER BY version DESC LIMIT 1`` and hope.
+
+    ``config_id`` pins a specific version -- a campaign keeps speaking the
+    version it was approved with, even after a newer one is published. A
+    pinned version that has since been deleted falls back to the published
+    one rather than to silence.
     """
-    row = await session.scalar(
-        select(AgentConfig).where(
-            AgentConfig.organization_id == organization_id,
-            AgentConfig.flow_type == flow_type,
-            AgentConfig.is_published.is_(True),
-            AgentConfig.deleted_at.is_(None),
+    row: AgentConfig | None = None
+    if config_id is not None:
+        row = await session.scalar(
+            select(AgentConfig).where(
+                AgentConfig.id == config_id,
+                AgentConfig.organization_id == organization_id,
+                AgentConfig.flow_type == flow_type,
+                AgentConfig.deleted_at.is_(None),
+            )
         )
-    )
+    if row is None:
+        row = await session.scalar(
+            select(AgentConfig).where(
+                AgentConfig.organization_id == organization_id,
+                AgentConfig.flow_type == flow_type,
+                AgentConfig.is_published.is_(True),
+                AgentConfig.deleted_at.is_(None),
+            )
+        )
     if row is None:
         raise ConfigurationMissing(
             f"No published {flow_type.value} agent config for this organization.",
@@ -131,6 +162,7 @@ async def load_agent_settings(
         llm_settings=dict(row.llm_settings),
         tts_settings=dict(row.tts_settings),
         guardrails=dict(row.guardrails),
+        script=dict(row.script or {}),
     )
 
 
@@ -143,6 +175,81 @@ class Caller:
     village: str | None = None
     language: str = "hi-IN"
     known: bool = False
+    #: For the panel, which shows a farmer as a name and four digits.
+    last4: str | None = None
+    centre_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CallLink:
+    """Who and what this call is about, for the call record and the live view."""
+
+    farmer_id: uuid.UUID | None = None
+    farmer_name: str | None = None
+    farmer_last4: str | None = None
+    centre_id: uuid.UUID | None = None
+    centre_code: str | None = None
+    centre_name: str | None = None
+    campaign_id: uuid.UUID | None = None
+    contact_id: uuid.UUID | None = None
+    language: str | None = None
+    config_version: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OutboundContact:
+    """The campaign contact an outbound call is serving (§13.2)."""
+
+    contact_id: uuid.UUID
+    campaign_id: uuid.UUID
+    farmer_id: uuid.UUID | None
+    #: The version the campaign was approved with, or None for "the published one".
+    agent_config_id: uuid.UUID | None
+
+
+async def find_outbound_contact(
+    session: AsyncSession,
+    *,
+    contact_id: uuid.UUID | None,
+    phone_hash: bytes | None,
+) -> OutboundContact | None:
+    """Which contact an outbound call belongs to.
+
+    By the id the dialer put in the originate request when there is one; by
+    the phone hash otherwise, taking the contact most recently marked as
+    being dialled in a running campaign. The second path exists for a
+    provider that drops custom fields, and is why the dialer marks the
+    contact *before* it dials.
+    """
+    statement = (
+        select(CampaignContact, Campaign.agent_config_id)
+        .join(Campaign, Campaign.id == CampaignContact.campaign_id)
+        .where(Campaign.deleted_at.is_(None))
+    )
+    if contact_id is not None:
+        statement = statement.where(CampaignContact.id == contact_id)
+    elif phone_hash is not None:
+        statement = (
+            statement.where(
+                CampaignContact.phone_hash == phone_hash,
+                CampaignContact.status == ContactStatus.DIALING,
+                Campaign.status == CampaignStatus.RUNNING,
+            )
+            .order_by(CampaignContact.last_attempt_at.desc().nulls_last())
+            .limit(1)
+        )
+    else:
+        return None
+    row = (await session.execute(statement)).first()
+    if row is None:
+        return None
+    contact, config_id = row
+    return OutboundContact(
+        contact_id=contact.id,
+        campaign_id=contact.campaign_id,
+        farmer_id=contact.farmer_id,
+        agent_config_id=config_id,
+    )
 
 
 async def identify_caller(
@@ -179,7 +286,112 @@ async def identify_caller(
         # rather than interrogating the farmer again.
         language=farmer.preferred_language or default_language,
         known=True,
+        last4=farmer.phone_last4,
+        centre_id=farmer.assigned_centre_id,
     )
+
+
+async def _centre_named(session: AsyncSession, centre_id: uuid.UUID | None) -> Centre | None:
+    """The farmer's centre, for the greeting's "{केंद्र}" and the live view."""
+    if centre_id is None:
+        return None
+    try:
+        centre: Centre | None = await session.scalar(
+            select(Centre).where(Centre.id == centre_id, Centre.deleted_at.is_(None))
+        )
+    except Exception as exc:
+        log.warning("assembly.centre_lookup_failed", error=type(exc).__name__)
+        return None
+    return centre
+
+
+def _suppressor(call_id: uuid.UUID, phone_hash: bytes | None) -> Callable[[], Awaitable[None]]:
+    """§13.2's opt-out write: ``internal_dnc`` set before the call goes on.
+
+    Its own session, opened when the farmer asks and closed before the
+    confirmation is spoken. The session that built the pipeline is long gone
+    by then, and the write must not wait for the call to end.
+    """
+
+    async def suppress() -> None:
+        if phone_hash is None:
+            return
+        now = datetime.now(UTC)
+        async with incall_session() as db:
+            existing = await db.scalar(select(DndStatus).where(DndStatus.phone_hash == phone_hash))
+            if existing is None:
+                db.add(
+                    DndStatus(
+                        phone_hash=phone_hash,
+                        internal_dnc=True,
+                        internal_dnc_at=now,
+                        internal_dnc_source_call_id=call_id,
+                        source="call_opt_out",
+                    )
+                )
+            else:
+                await db.execute(
+                    update(DndStatus)
+                    .where(DndStatus.phone_hash == phone_hash)
+                    .values(
+                        internal_dnc=True,
+                        internal_dnc_at=now,
+                        internal_dnc_source_call_id=call_id,
+                    )
+                )
+            await db.commit()
+        log.info("outbound.suppressed")
+
+    return suppress
+
+
+def _contact_finisher(
+    contact: OutboundContact,
+    responder: OutboundResponder,
+    live_feed: LiveFeed | None,
+    *,
+    farmer_name: str | None,
+    farmer_last4: str | None,
+) -> Callable[[Any, CallStatus, CallOutcome | None], Awaitable[None]]:
+    """Write what the script decided to the contact, and tell the panel."""
+
+    async def finish(repository: Any, status: CallStatus, outcome: CallOutcome | None) -> None:
+        result = responder.result
+        contact_status = result.status
+        panel_outcome = result.outcome
+        if panel_outcome is None:
+            # The line dropped before the farmer said anything: not reached,
+            # and the retry policy decides whether to try again.
+            contact_status = ContactStatus.NO_ANSWER
+            panel_outcome = "no_answer"
+        if repository is not None:
+            await repository.finish_contact(
+                contact.contact_id,
+                status=contact_status,
+                outcome=panel_outcome,
+                dtmf=result.dtmf,
+                interest=result.interest,
+            )
+        if live_feed is not None:
+            live_feed.publish(
+                LiveEvent(
+                    type=CONTACT_UPDATED,
+                    payload={
+                        "id": str(contact.contact_id),
+                        "farmerName": farmer_name,
+                        "last4": farmer_last4 or "",
+                        "status": "done"
+                        if contact_status is not ContactStatus.NO_ANSWER
+                        else "no_answer",
+                        "outcome": panel_outcome,
+                        "dtmf": result.dtmf,
+                        "callId": None,
+                    },
+                    campaign_id=str(contact.campaign_id),
+                )
+            )
+
+    return finish
 
 
 def render_greeting(template: str, caller: Caller) -> str:
@@ -203,11 +415,16 @@ class CallPipeline:
     """A built pipeline plus what the session needs to run and close it."""
 
     pipeline: ConversationPipeline
-    agent: Agent
+    #: The knowledge agent. On an outbound call it answers the farmer's
+    #: questions behind the script; None when no inbound config is published.
+    agent: Agent | None
     stack: SpeechStack
     settings: AgentSettings
     caller: Caller
     greeting_pcm: bytes
+    link: CallLink = field(default_factory=CallLink)
+    #: Outbound only: writes the contact's result when the call ends.
+    finish: Callable[[Any, CallStatus, CallOutcome | None], Awaitable[None]] | None = None
 
 
 async def build_call_pipeline(
@@ -227,6 +444,10 @@ async def build_call_pipeline(
     lexicon: Lexicon | None = None,
     flow_type: FlowType = FlowType.INBOUND,
     realtime: bool = True,
+    direction: CallDirection = CallDirection.INBOUND,
+    contact: OutboundContact | None = None,
+    live_feed: LiveFeed | None = None,
+    config_id: uuid.UUID | None = None,
 ) -> CallPipeline:
     """Construct everything one call needs, in dependency order.
 
@@ -234,13 +455,25 @@ async def build_call_pipeline(
     language decides the speech stack (§5.1 routes Hindi to Flux and Marathi to
     Sarvam, and they are different services with different turn detectors), and
     the stack decides how the greeting is synthesised.
+
+    An outbound call (§13.2) is built the same way with one substitution: the
+    script responder stands where the LLM agent stands, and the agent moves
+    behind it to answer the farmer's questions. Everything else -- the stack,
+    the cache, barge-in, latency accounting -- is shared, which is the point.
     """
+    if direction is CallDirection.OUTBOUND:
+        flow_type = FlowType.OUTBOUND
+    # A campaign speaks the version it was approved with; a panel test call
+    # speaks the draft it was placed for; everything else speaks what is
+    # published.
+    pinned = contact.agent_config_id if contact is not None else config_id
     agent_settings = await load_agent_settings(
-        session, organization_id=organization_id, flow_type=flow_type
+        session, organization_id=organization_id, flow_type=flow_type, config_id=pinned
     )
     caller = await identify_caller(
         session, phone_hash, default_language=defaults.default_language
     )
+    centre = await _centre_named(session, caller.centre_id)
 
     # §5.1's declarative routing. Chosen from the caller's language, which is
     # why the lookup comes first.
@@ -269,38 +502,70 @@ async def build_call_pipeline(
     connecting = asyncio.create_task(stack.stt.start(stack.stt_config))
 
     audio_cache = cache if cache is not None else AudioCache()
-    tool_context = ToolContext(call_id=str(call_id))
+    resolved_gateway = gateway if gateway is not None else build_gateway(settings)
 
-    agent = Agent(
-        registry=registry,
-        context_builder=ContextBuilder(persona=agent_settings.system_prompt),
-        gateway=gateway if gateway is not None else build_gateway(settings),
-        validator=OutputValidator(),
-        escalation=EscalationEngine(),
-        caller=CallerContext(
-            name=caller.name,
-            village=caller.village,
-            language=caller.language,
-        ),
-        hint=DynamicHint(),
-        flow=CallFlow(),
-        tool_context=tool_context,
-    )
+    agent: Agent | None
+    responder: Any
+    finish: Callable[[Any, CallStatus, CallOutcome | None], Awaitable[None]] | None = None
+    if flow_type is FlowType.OUTBOUND:
+        # The knowledge agent answers questions behind the script. It speaks
+        # with the *inbound* persona because that is the one grounded in the
+        # catalogue and the knowledge base; a deployment that has not published
+        # an inbound config gets a script that politely declines questions.
+        agent = None
+        try:
+            inbound = await load_agent_settings(
+                session, organization_id=organization_id, flow_type=FlowType.INBOUND
+            )
+        except ConfigurationMissing:
+            inbound = None
+        if inbound is not None:
+            agent = build_agent(
+                registry=registry,
+                persona=inbound.system_prompt,
+                gateway=resolved_gateway,
+                caller=caller,
+                call_id=call_id,
+            )
+        responder = OutboundResponder(
+            script=OutboundScript.from_config(agent_settings.script),
+            farmer_name=caller.name,
+            centre_name=(centre.name_hi or centre.name) if centre is not None else None,
+            questions=agent,
+            suppress=_suppressor(call_id, phone_hash),
+        )
+        opening = responder.opening()
+        if contact is not None:
+            finish = _contact_finisher(
+                contact,
+                responder,
+                live_feed,
+                farmer_name=caller.name,
+                farmer_last4=caller.last4,
+            )
+    else:
+        agent = build_agent(
+            registry=registry,
+            persona=agent_settings.system_prompt,
+            gateway=resolved_gateway,
+            caller=caller,
+            call_id=call_id,
+        )
+        responder = agent
+        opening = render_greeting(agent_settings.greeting_template, caller)
 
     sender = PacedSender(send_frame, realtime=realtime)
     pipeline = ConversationPipeline(
         stack=stack,
         sender=sender,
-        responder=agent,
+        responder=responder,
         defaults=defaults,
         cache=audio_cache,
         barge_in=BargeInPolicy(),
         clear_playback=clear_playback,
     )
 
-    greeting_pcm = await _greeting_audio(
-        agent_settings.greeting_template, caller, stack, audio_cache
-    )
+    greeting_pcm = await _greeting_audio(opening, stack, audio_cache)
 
     # Whatever the handshake cost, it was paid while the greeting was being
     # prepared. Awaited rather than left running so that a recogniser that
@@ -329,20 +594,62 @@ async def build_call_pipeline(
         settings=agent_settings,
         caller=caller,
         greeting_pcm=greeting_pcm,
+        link=CallLink(
+            farmer_id=caller.farmer_id,
+            farmer_name=caller.name,
+            farmer_last4=caller.last4,
+            centre_id=centre.id if centre is not None else None,
+            centre_code=centre.code if centre is not None else None,
+            centre_name=centre.name if centre is not None else None,
+            campaign_id=contact.campaign_id if contact is not None else None,
+            contact_id=contact.contact_id if contact is not None else None,
+            language=stack.served_by,
+            config_version=agent_settings.version,
+        ),
+        finish=finish,
     )
 
 
-async def _greeting_audio(
-    template: str, caller: Caller, stack: SpeechStack, cache: AudioCache
-) -> bytes:
-    """Synthesise the greeting, or take the cached rendering.
+def build_agent(
+    *,
+    registry: ToolRegistry,
+    persona: str,
+    gateway: LlmGateway,
+    caller: Caller,
+    call_id: uuid.UUID,
+) -> Agent:
+    """The DISCOVER ⇄ RESOLVE agent for one call, or for one panel question.
+
+    Shared by the phone path and the control plane's "try a question" so the
+    panel gets exactly the answer a caller would -- same persona, same tools,
+    same validator, same refusal to invent a dose.
+    """
+    return Agent(
+        registry=registry,
+        context_builder=ContextBuilder(persona=persona),
+        gateway=gateway,
+        validator=OutputValidator(),
+        escalation=EscalationEngine(),
+        caller=CallerContext(
+            name=caller.name,
+            village=caller.village,
+            language=caller.language,
+        ),
+        hint=DynamicHint(),
+        flow=CallFlow(),
+        tool_context=ToolContext(call_id=str(call_id)),
+    )
+
+
+async def _greeting_audio(opening: str, stack: SpeechStack, cache: AudioCache) -> bytes:
+    """Synthesise the opening line, or take the cached rendering.
 
     A named greeting is cached per name, which is a smaller win than the
     generic one but still a hit for a farmer who calls twice in a week. A
     failure returns empty rather than raising: §11.4 would rather open with
     silence and recover than drop the call at hello.
     """
-    spoken = text_for_speech(render_greeting(template, caller))
+    spoken = text_for_speech(opening)
     if not spoken:
         return b""
     try:
@@ -367,10 +674,14 @@ async def _synthesise(stack: SpeechStack, spoken: str) -> bytes:
 
 __all__ = (
     "AgentSettings",
+    "CallLink",
     "CallPipeline",
     "Caller",
     "ConfigurationMissing",
+    "OutboundContact",
+    "build_agent",
     "build_call_pipeline",
+    "find_outbound_contact",
     "identify_caller",
     "load_agent_settings",
     "render_greeting",

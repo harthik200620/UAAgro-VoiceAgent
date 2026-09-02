@@ -3,7 +3,7 @@ import createNextIntlPlugin from "next-intl/plugin";
 const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
 /**
- * §17 and §1 N6: nothing secret reaches the browser bundle.
+ * Nothing secret reaches the browser bundle.
  *
  * `serverExternalPackages` keeps server-only modules out of client compilation,
  * and the absence of any `env` block here is deliberate -- Next inlines
@@ -22,6 +22,11 @@ const config = withNextIntl({
   // a full `node_modules`. Without this the Dockerfile's COPY finds nothing and
   // the image fails to build, so the two are a pair.
   output: "standalone",
+  experimental: {
+    // Knowledge-base uploads (a 48-page PDF) go through a Server Action, and
+    // the default 1 MB body limit would refuse them before the API saw them.
+    serverActions: { bodySizeLimit: "25mb" },
+  },
   async headers() {
     return [
       {
@@ -32,9 +37,10 @@ const config = withNextIntl({
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           {
             key: "Permissions-Policy",
-            // The sandbox test call (§15.1 Flows & Prompts) needs the mic on
-            // this origin. Everything else is off.
-            value: "camera=(), geolocation=(), microphone=(self)",
+            // Nothing on the panel uses the camera, location or microphone:
+            // "Play in Hindi voice" only plays audio, and a test call rings a
+            // real phone.
+            value: "camera=(), geolocation=(), microphone=()",
           },
         ],
       },

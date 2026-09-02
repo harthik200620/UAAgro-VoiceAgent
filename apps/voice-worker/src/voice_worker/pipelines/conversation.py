@@ -25,7 +25,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 
@@ -112,6 +112,19 @@ class ConversationPipeline:
 
     latency: CallLatency = field(default_factory=CallLatency)
     turns: list[TurnOutcome] = field(default_factory=list)
+
+    #: Told about each finished turn -- the session persists it and feeds the
+    #: live view. Synchronous and must return fast; it runs on the audio path.
+    on_turn: Callable[[TurnOutcome], None] | None = None
+    #: Told when the agent starts thinking, speaking or listening (§15.1's
+    #: live view shows which). Same contract as ``on_turn``.
+    on_activity: Callable[[str], None] | None = None
+    #: Awaited once the responder has said its last line and wants the call
+    #: ended -- the outbound script's closing. Inbound responders never ask.
+    on_call_over: Callable[[], Awaitable[None]] | None = None
+    #: A hand-over the responder prepared (§12.3). Called once the transfer
+    #: line has been spoken, with the request; the session owns the phone line.
+    on_transfer: Callable[[Any], Awaitable[None]] | None = None
 
     _speculation: _Speculation | None = field(default=None, repr=False)
     _turn_index: int = 0
@@ -305,6 +318,7 @@ class ConversationPipeline:
             self._finish_turn(metrics, outcome)
             return
 
+        self._activity("thinking")
         metrics.mark("generation_started_at")
         chunks = await self._take_speculation(transcript)
         if chunks is not None:
@@ -316,6 +330,61 @@ class ConversationPipeline:
         else:
             await self._stream_answer(transcript, metrics, outcome)
         self._finish_turn(metrics, outcome)
+        await self._transfer_if_asked()
+        await self._end_call_if_asked()
+
+    async def on_dtmf(self, digit: str) -> None:
+        """A keypress, for responders that treat one as a turn (§13.2).
+
+        The outbound script offers "press one or say yes" and must treat the
+        two identically, so a digit arrives here as a turn the recogniser
+        could never have produced. A press while the agent is still talking
+        interrupts it first -- the farmer who presses one halfway through the
+        question has answered it.
+        """
+        if not getattr(self.responder, "accepts_dtmf", False):
+            return
+        await self._on_speech_started()
+        await self._discard_speculation("keypress")
+        self._metrics = TurnMetrics(turn_index=self._turn_index)
+        self._metrics.mark("speech_ended_at")
+        await self._commit(f"[dtmf {digit}]")
+
+    async def _transfer_if_asked(self) -> None:
+        """Join the caller to a person once they have heard it is happening (§12.3-1)."""
+        if self.on_transfer is None:
+            return
+        request = getattr(self.responder, "pending_transfer", None)
+        if request is None:
+            return
+        await self.on_transfer(request)
+
+    async def announce(self, text: str) -> None:
+        """Speak a line that answers nothing: a hand-over that could not be made.
+
+        Recorded as a turn of its own so the transcript shows what the caller
+        was promised, with no farmer text in front of it.
+        """
+        metrics = TurnMetrics(turn_index=self._turn_index)
+        for mark in ("committed_at", "transcript_at", "generation_started_at", "first_token_at"):
+            metrics.mark(mark)
+        outcome = TurnOutcome(turn_index=self._turn_index, response=text)
+        self.turns.append(outcome)
+        await self._speak(text, metrics, outcome)
+        self._finish_turn(metrics, outcome)
+
+    async def _end_call_if_asked(self) -> None:
+        if self.on_call_over is None or not getattr(self.responder, "call_over", False):
+            return
+        await self.on_call_over()
+
+    def _activity(self, state: str) -> None:
+        if self.on_activity is None:
+            return
+        try:
+            self.on_activity(state)
+        except Exception as exc:  # pragma: no cover - a hook must never end a call
+            log.warning("pipeline.activity_hook_failed", error=type(exc).__name__)
 
     async def _hold_if_slow(self, metrics: TurnMetrics, outcome: TurnOutcome) -> None:
         """Say "one moment" if the answer is taking too long (§11.4).
@@ -377,9 +446,7 @@ class ConversationPipeline:
         hold = asyncio.create_task(self._hold_if_slow(metrics, outcome))
 
         try:
-            async for fragment in self.responder.respond(
-                transcript, language=self.stack.served_by
-            ):
+            async for fragment in self.responder.respond(transcript, language=self.stack.served_by):
                 if metrics.first_token_at is None:
                     metrics.mark("first_token_at")
                 for sentence in buffer.add(fragment):
@@ -412,10 +479,12 @@ class ConversationPipeline:
         self._answer_started = False
         self.sender.resume()
         self.sender.tracker.reset()
+        self._activity("speaking")
 
     def _end_playback(self, outcome: TurnOutcome) -> None:
         self._agent_speaking = False
         outcome.spoken = self.sender.tracker.spoken_text()
+        self._activity("listening")
 
     async def _speak_sentence(
         self, sentence: str, metrics: TurnMetrics, outcome: TurnOutcome
@@ -542,6 +611,12 @@ class ConversationPipeline:
             # signal rather than a failure -- but an unlogged breach is a
             # regression nobody notices until a farmer does.
             log.info("pipeline.budget_breach", turn=metrics.turn_index, breaches=breaches)
+
+        if self.on_turn is not None:
+            try:
+                self.on_turn(outcome)
+            except Exception as exc:  # pragma: no cover - a hook must never end a call
+                log.warning("pipeline.turn_hook_failed", error=type(exc).__name__)
 
         self._turn_index += 1
         self._metrics = None

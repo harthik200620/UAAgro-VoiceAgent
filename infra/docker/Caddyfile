@@ -1,0 +1,29 @@
+# Two hostnames, two services. Everything else stays on the compose network.
+
+{$PANEL_HOST} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	# Server-sent events must not be buffered on the way to the browser.
+	@events path /api/events/*
+	reverse_proxy @events admin:3000 {
+		flush_interval -1
+		transport http {
+			read_timeout 0
+		}
+	}
+	reverse_proxy admin:3000
+}
+
+{$VOICE_HOST} {
+	# Only the media WebSocket and the probes. The worker's internal endpoints
+	# answer to the API alone, on the compose network.
+	@voice path /ws/voice /health/live /health/ready
+	reverse_proxy @voice voice-worker:8080
+	respond 404
+}

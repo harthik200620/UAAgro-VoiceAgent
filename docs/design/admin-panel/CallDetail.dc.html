@@ -1,0 +1,213 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Devanagari:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=Tiro+Devanagari+Hindi&family=Caveat:wght@500&display=swap" rel="stylesheet">
+  <style>
+*{box-sizing:border-box}
+body{margin:0;background:#F7F5EF;color:#17160F;font-family:'IBM Plex Sans','IBM Plex Sans Devanagari','Noto Sans Devanagari',system-ui,sans-serif;font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+a{color:#17160F;text-decoration:none} a:hover{color:#6B6759}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(242,179,61,.55)}70%{box-shadow:0 0 0 9px rgba(242,179,61,0)}100%{box-shadow:0 0 0 0 rgba(242,179,61,0)}}
+@keyframes dots{0%,20%{opacity:.2}50%{opacity:1}100%{opacity:.2}}
+.live-dot{animation:pulse 1.6s ease-out infinite}
+.dot1{animation:dots 1.2s infinite}.dot2{animation:dots 1.2s .2s infinite}.dot3{animation:dots 1.2s .4s infinite}
+</style>
+</helmet>
+<div style="display:flex;width:1440px;height:1400px;background:#F7F5EF;overflow:hidden;color:#17160F;font-family:'IBM Plex Sans','IBM Plex Sans Devanagari','Noto Sans Devanagari',system-ui,sans-serif;">
+  
+<aside style="width:224px;flex:none;height:100%;background:#F1EEE6;border-right:1px solid #E6E1D6;display:flex;flex-direction:column;padding:22px 14px 18px;">
+  <div style="display:flex;align-items:center;gap:12px;padding:4px 8px 0;">
+    <div style="width:36px;height:36px;border-radius:10px;background:#1E5B3A;display:flex;align-items:center;justify-content:center;"><svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#F7F5EF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M10 17V9"/><path d="M10 11c0-3 2.5-5 6-5 0 3-2.5 5-6 5z"/><path d="M10 9c0-3-2.5-5-6-5 0 3 2.5 5 6 5z"/></svg></div>
+    <div style="line-height:1.2;">
+      <div style="font-weight:600;font-size:15px;letter-spacing:-.01em;">UA Agro</div>
+      <div lang="hi" style="font-size:11.5px;color:#6B6759;">किसान सेवा केंद्र</div>
+    </div>
+  </div>
+  <nav style="display:flex;flex-direction:column;gap:2px;margin-top:30px;"><a href="#" style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;background:transparent;color:#17160F;font-weight:500;font-size:14px;"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><polyline points="2 10 6 10 8 4 12 16 14 10 18 10"/></svg><span>Live</span></a><a href="#" style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;background:transparent;color:#17160F;font-weight:500;font-size:14px;"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M4 3h3l1.5 4-2 1.5a10 10 0 0 0 5 5L13 11.5l4 1.5v3a1 1 0 0 1-1 1A14 14 0 0 1 3 4a1 1 0 0 1 1-1z"/></svg><span>Calls</span></a><a href="#" style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;background:#17160F;color:#F7F5EF;font-weight:600;font-size:14px;"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M6 14L14 6M8 6h6v6"/></svg><span>Outbound</span></a><a href="#" style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;background:transparent;color:#17160F;font-weight:500;font-size:14px;"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M14 6L6 14M12 14H6V8"/></svg><span>Inbound</span></a><a href="#" style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;background:transparent;color:#17160F;font-weight:500;font-size:14px;"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="5" cy="5" r="2"/><circle cx="15" cy="15" r="2"/><path d="M5 7v3a3 3 0 0 0 3 3h5"/></svg><span>Flows</span></a><a href="#" style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;background:transparent;color:#17160F;font-weight:500;font-size:14px;"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><ellipse cx="10" cy="5" rx="6" ry="2.5"/><path d="M4 5v10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5"/><path d="M4 10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5"/></svg><span>Data</span></a></nav>
+  <div style="margin-top:auto;display:flex;flex-direction:column;gap:14px;">
+    <div style="display:flex;border:1px solid #E6E1D6;border-radius:8px;overflow:hidden;background:#FFFFFF;">
+      <div style="flex:1;text-align:center;padding:7px 0;font-size:12.5px;font-weight:600;background:#17160F;color:#F7F5EF;">EN</div>
+      <div lang="hi" style="flex:1;text-align:center;padding:7px 0;font-size:12.5px;color:#6B6759;">हिं</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;padding:4px 6px;">
+      <div style="width:32px;height:32px;border-radius:50%;background:#FFFFFF;border:1px solid #E6E1D6;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;">OM</div>
+      <div style="line-height:1.25;min-width:0;">
+        <div style="font-size:13px;font-weight:500;">Ops manager</div>
+        <div style="font-size:11.5px;color:#6B6759;">Sign out</div>
+      </div>
+    </div>
+  </div>
+</aside>
+  <main style="flex:1;min-width:0;padding:30px 40px 36px;display:flex;flex-direction:column;gap:22px;overflow:hidden;">
+
+<div style="display:flex;flex-direction:column;gap:14px;">
+  <a href="#" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#6B6759;"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M12 4l-6 6 6 6"/></svg>Outbound · <span lang="hi">डीएपी ऑफ़र — रबी 2026</span></a>
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;">
+    <div>
+      <div style="display:flex;align-items:center;gap:12px;"><h1 lang="hi" style="margin:0;font-size:32px;font-weight:600;line-height:1.1;letter-spacing:-.01em;">कमला देवी</h1><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:14px;color:#6B6759;letter-spacing:0;">···9560</span><span style="display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;background:#DDF0E3;color:#1C5E33;font-size:12px;font-weight:500;white-space:nowrap;"><span style="width:7px;height:7px;border-radius:50%;background:#3C9D5D;flex:none;"></span>Offer accepted · 1</span></div>
+      <p style="margin:6px 0 0;color:#6B6759;font-size:13.5px;">Outbound · Sitapur centre · Tuesday 2 September, 11:37 · 58 seconds</p>
+    </div>
+    <div style="display:flex;gap:10px;"><button style="display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:8px;white-space:nowrap;background:#FFFFFF;color:#17160F;border:1px solid #E6E1D6;font-family:'IBM Plex Sans','IBM Plex Sans Devanagari','Noto Sans Devanagari',system-ui,sans-serif;font-size:13.5px;font-weight:500;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M4 3h3l1.5 4-2 1.5a10 10 0 0 0 5 5L13 11.5l4 1.5v3a1 1 0 0 1-1 1A14 14 0 0 1 3 4a1 1 0 0 1 1-1z"/></svg><span>Call again</span></button><button style="display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:8px;white-space:nowrap;background:#FFFFFF;color:#17160F;border:1px solid #E6E1D6;font-family:'IBM Plex Sans','IBM Plex Sans Devanagari','Noto Sans Devanagari',system-ui,sans-serif;font-size:13.5px;font-weight:500;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M4 16l1-3.2A6.5 6.5 0 1 1 7.4 15z"/><path d="M8 8.5c.3 1.6 1.9 3.2 3.5 3.5l1-.9-1.2-.9-.6.5c-.6-.3-1.1-.8-1.4-1.4l.5-.6-.9-1.2z"/></svg><span>Share</span></button></div>
+  </div>
+</div>
+<div style="display:flex;gap:16px;align-items:flex-start;">
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:16px;"><div style="background:#FFFFFF;border:1px solid #E6E1D6;border-radius:12px;box-shadow:0 1px 2px rgba(23,22,15,.04);">
+<div style="padding:16px 20px;display:flex;align-items:center;gap:16px;">
+  <button style="width:44px;height:44px;border-radius:50%;background:#17160F;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#F7F5EF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M6 4l10 6-10 6z" fill="currentColor" stroke="none"/></svg></button>
+  <div style="flex:1;min-width:0;"><svg width="100%" height="40" viewBox="0 0 672 40" preserveAspectRatio="none"><rect x="0" y="3.5" width="4" height="33" rx="2" fill="#17160F"/><rect x="7" y="11.5" width="4" height="17" rx="2" fill="#17160F"/><rect x="14" y="8.0" width="4" height="24" rx="2" fill="#17160F"/><rect x="21" y="7.0" width="4" height="26" rx="2" fill="#17160F"/><rect x="28" y="15.0" width="4" height="10" rx="2" fill="#17160F"/><rect x="35" y="3.0" width="4" height="34" rx="2" fill="#17160F"/><rect x="42" y="11.0" width="4" height="18" rx="2" fill="#17160F"/><rect x="49" y="8.5" width="4" height="23" rx="2" fill="#17160F"/><rect x="56" y="4.5" width="4" height="31" rx="2" fill="#17160F"/><rect x="63" y="17.0" width="4" height="6" rx="2" fill="#17160F"/><rect x="70" y="4.5" width="4" height="31" rx="2" fill="#17160F"/><rect x="77" y="11.0" width="4" height="18" rx="2" fill="#17160F"/><rect x="84" y="11.0" width="4" height="18" rx="2" fill="#17160F"/><rect x="91" y="4.0" width="4" height="32" rx="2" fill="#17160F"/><rect x="98" y="14.0" width="4" height="12" rx="2" fill="#17160F"/><rect x="105" y="7.0" width="4" height="26" rx="2" fill="#17160F"/><rect x="112" y="9.5" width="4" height="21" rx="2" fill="#17160F"/><rect x="119" y="11.0" width="4" height="18" rx="2" fill="#17160F"/><rect x="126" y="2.5" width="4" height="35" rx="2" fill="#17160F"/><rect x="133" y="13.0" width="4" height="14" rx="2" fill="#17160F"/><rect x="140" y="7.0" width="4" height="26" rx="2" fill="#17160F"/><rect x="147" y="7.5" width="4" height="25" rx="2" fill="#17160F"/><rect x="154" y="13.5" width="4" height="13" rx="2" fill="#17160F"/><rect x="161" y="1.5" width="4" height="37" rx="2" fill="#17160F"/><rect x="168" y="13.0" width="4" height="14" rx="2" fill="#17160F"/><rect x="175" y="9.5" width="4" height="21" rx="2" fill="#17160F"/><rect x="182" y="5.0" width="4" height="30" rx="2" fill="#17160F"/><rect x="189" y="15.5" width="4" height="9" rx="2" fill="#17160F"/><rect x="196" y="3.0" width="4" height="34" rx="2" fill="#17160F"/><rect x="203" y="11.0" width="4" height="18" rx="2" fill="#17160F"/><rect x="210" y="8.5" width="4" height="23" rx="2" fill="#17160F"/><rect x="217" y="6.5" width="4" height="27" rx="2" fill="#17160F"/><rect x="224" y="14.5" width="4" height="11" rx="2" fill="#17160F"/><rect x="231" y="6.5" width="4" height="27" rx="2" fill="#17160F"/><rect x="238" y="10.5" width="4" height="19" rx="2" fill="#D9D4C8"/><rect x="245" y="10.5" width="4" height="19" rx="2" fill="#D9D4C8"/><rect x="252" y="5.0" width="4" height="30" rx="2" fill="#D9D4C8"/><rect x="259" y="15.0" width="4" height="10" rx="2" fill="#D9D4C8"/><rect x="266" y="7.5" width="4" height="25" rx="2" fill="#D9D4C8"/><rect x="273" y="9.0" width="4" height="22" rx="2" fill="#D9D4C8"/><rect x="280" y="12.0" width="4" height="16" rx="2" fill="#D9D4C8"/><rect x="287" y="2.0" width="4" height="36" rx="2" fill="#D9D4C8"/><rect x="294" y="12.5" width="4" height="15" rx="2" fill="#D9D4C8"/><rect x="301" y="7.5" width="4" height="25" rx="2" fill="#D9D4C8"/><rect x="308" y="6.5" width="4" height="27" rx="2" fill="#D9D4C8"/><rect x="315" y="13.5" width="4" height="13" rx="2" fill="#D9D4C8"/><rect x="322" y="2.5" width="4" height="35" rx="2" fill="#D9D4C8"/><rect x="329" y="11.0" width="4" height="18" rx="2" fill="#D9D4C8"/><rect x="336" y="8.0" width="4" height="24" rx="2" fill="#D9D4C8"/><rect x="343" y="6.0" width="4" height="28" rx="2" fill="#D9D4C8"/><rect x="350" y="15.5" width="4" height="9" rx="2" fill="#D9D4C8"/><rect x="357" y="4.0" width="4" height="32" rx="2" fill="#D9D4C8"/><rect x="364" y="12.5" width="4" height="15" rx="2" fill="#D9D4C8"/><rect x="371" y="11.0" width="4" height="18" rx="2" fill="#D9D4C8"/><rect x="378" y="6.0" width="4" height="28" rx="2" fill="#D9D4C8"/><rect x="385" y="15.5" width="4" height="9" rx="2" fill="#D9D4C8"/><rect x="392" y="6.0" width="4" height="28" rx="2" fill="#D9D4C8"/><rect x="399" y="10.0" width="4" height="20" rx="2" fill="#D9D4C8"/><rect x="406" y="10.0" width="4" height="20" rx="2" fill="#D9D4C8"/><rect x="413" y="3.5" width="4" height="33" rx="2" fill="#D9D4C8"/><rect x="420" y="13.5" width="4" height="13" rx="2" fill="#D9D4C8"/><rect x="427" y="6.5" width="4" height="27" rx="2" fill="#D9D4C8"/><rect x="434" y="8.5" width="4" height="23" rx="2" fill="#D9D4C8"/><rect x="441" y="11.5" width="4" height="17" rx="2" fill="#D9D4C8"/><rect x="448" y="2.5" width="4" height="35" rx="2" fill="#D9D4C8"/><rect x="455" y="13.0" width="4" height="14" rx="2" fill="#D9D4C8"/><rect x="462" y="8.0" width="4" height="24" rx="2" fill="#D9D4C8"/><rect x="469" y="7.0" width="4" height="26" rx="2" fill="#D9D4C8"/><rect x="476" y="13.0" width="4" height="14" rx="2" fill="#D9D4C8"/><rect x="483" y="2.5" width="4" height="35" rx="2" fill="#D9D4C8"/><rect x="490" y="11.5" width="4" height="17" rx="2" fill="#D9D4C8"/><rect x="497" y="9.5" width="4" height="21" rx="2" fill="#D9D4C8"/><rect x="504" y="6.5" width="4" height="27" rx="2" fill="#D9D4C8"/><rect x="511" y="13.5" width="4" height="13" rx="2" fill="#D9D4C8"/><rect x="518" y="5.0" width="4" height="30" rx="2" fill="#D9D4C8"/><rect x="525" y="11.5" width="4" height="17" rx="2" fill="#D9D4C8"/><rect x="532" y="9.0" width="4" height="22" rx="2" fill="#D9D4C8"/><rect x="539" y="4.0" width="4" height="32" rx="2" fill="#D9D4C8"/><rect x="546" y="14.5" width="4" height="11" rx="2" fill="#D9D4C8"/><rect x="553" y="6.0" width="4" height="28" rx="2" fill="#D9D4C8"/><rect x="560" y="8.5" width="4" height="23" rx="2" fill="#D9D4C8"/><rect x="567" y="11.5" width="4" height="17" rx="2" fill="#D9D4C8"/><rect x="574" y="3.0" width="4" height="34" rx="2" fill="#D9D4C8"/><rect x="581" y="14.0" width="4" height="12" rx="2" fill="#D9D4C8"/><rect x="588" y="5.5" width="4" height="29" rx="2" fill="#D9D4C8"/><rect x="595" y="10.0" width="4" height="20" rx="2" fill="#D9D4C8"/><rect x="602" y="11.0" width="4" height="18" rx="2" fill="#D9D4C8"/><rect x="609" y="1.5" width="4" height="37" rx="2" fill="#D9D4C8"/><rect x="616" y="14.5" width="4" height="11" rx="2" fill="#D9D4C8"/><rect x="623" y="6.5" width="4" height="27" rx="2" fill="#D9D4C8"/><rect x="630" y="7.0" width="4" height="26" rx="2" fill="#D9D4C8"/><rect x="637" y="14.0" width="4" height="12" rx="2" fill="#D9D4C8"/><rect x="644" y="3.0" width="4" height="34" rx="2" fill="#D9D4C8"/><rect x="651" y="13.5" width="4" height="13" rx="2" fill="#D9D4C8"/><rect x="658" y="10.0" width="4" height="20" rx="2" fill="#D9D4C8"/><rect x="665" y="6.0" width="4" height="28" rx="2" fill="#D9D4C8"/></svg></div>
+  <div style="display:flex;align-items:center;gap:14px;flex:none;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:13px;letter-spacing:0;">0:21 / 0:58</span><span style="font-size:12.5px;color:#6B6759;">1×</span><button style="display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;white-space:nowrap;background:transparent;color:#17160F;border:1px solid transparent;font-family:'IBM Plex Sans','IBM Plex Sans Devanagari','Noto Sans Devanagari',system-ui,sans-serif;font-size:12.5px;font-weight:500;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg><span>Download</span></button></div>
+</div></div><div style="background:#FFFFFF;border:1px solid #E6E1D6;border-radius:12px;box-shadow:0 1px 2px rgba(23,22,15,.04);">
+<div style="padding:18px 22px;display:flex;flex-direction:column;gap:8px;">
+  <div style="font-size:12.5px;color:#6B6759;font-weight:500;">What happened</div>
+  <p lang="hi" style="margin:0;font-size:15.5px;line-height:1.65;">कमला देवी जी ने डीएपी ऑफ़र लिया (एक दबाया)। छूट के बाद बोरी का दाम पूछा। गेहूँ के बीज की सलाह चाही — कृषि विशेषज्ञ का कॉलबैक बना दिया गया। व्हाट्सऐप पर ऑफ़र भेज दिया गया।</p>
+  <p style="margin:0;font-size:13px;color:#6B6759;">Accepted the DAP offer (pressed 1), asked the discounted price, wanted wheat seed advice — an agronomist call-back was created. WhatsApp offer sent.</p>
+</div></div><div style="background:#FFFFFF;border:1px solid #E6E1D6;border-radius:12px;box-shadow:0 1px 2px rgba(23,22,15,.04);">
+<div style="padding:18px 22px 20px;display:flex;flex-direction:column;gap:14px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;"><div style="font-weight:600;">Transcript</div><div style="font-size:12.5px;color:#6B6759;">Hindi · times from the start of the call</div></div>
+  <div style="display:flex;flex-direction:column;gap:14px;">
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:00</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#17160F;color:#F7F5EF;font-size:11.5px;font-weight:600;">Agent</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">नमस्ते! मैं यूए एग्रो के नवीन खुशहाली किसान सेवा केंद्र से बोल रहा हूँ। यह एक ऑटोमैटिक कॉल है। क्या मैं कमला देवी जी से बात कर रहा हूँ?</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"><span style="display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;background:#F1EEE6;font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#6B6759;"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>52 ms <span style="color:#9B9689;">· from cache</span></span></div>
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:07</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#F1EEE6;color:#17160F;font-size:11.5px;font-weight:600;">Farmer</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">हाँ, बोल रही हूँ।</div>
+    
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:08</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#17160F;color:#F7F5EF;font-size:11.5px;font-weight:600;">Agent</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">आपका दो मिनट का समय ले सकता हूँ?</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"><span style="display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;background:#F1EEE6;font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#6B6759;"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>50 ms <span style="color:#9B9689;">· from cache</span></span></div>
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:10</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#F1EEE6;color:#17160F;font-size:11.5px;font-weight:600;">Farmer</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">हाँ बोलो।</div>
+    
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:11</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#17160F;color:#F7F5EF;font-size:11.5px;font-weight:600;">Agent</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">इस हफ़्ते डीएपी की बोरी पर पचास रुपये की छूट है, सीतापुर केंद्र पर। ऑफ़र चौदह सितंबर तक है। अगर आप यह ऑफ़र लेना चाहते हैं, तो अपने फ़ोन पर एक दबाइए — या बस 'हाँ' बोल दीजिए। और जानकारी के लिए दो दबाइए।</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"><span style="display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;background:#F1EEE6;font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#6B6759;"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>50 ms <span style="color:#9B9689;">· from cache</span></span></div>
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:24</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#F1EEE6;color:#17160F;font-size:11.5px;font-weight:600;">Farmer</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">एक बोरी का दाम कितना पड़ेगा?</div>
+    
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:25</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#17160F;color:#F7F5EF;font-size:11.5px;font-weight:600;">Agent</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">छूट के बाद बोरी बारह सौ रुपये पड़ेगी।</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"><span style="display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;background:#F1EEE6;font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#6B6759;"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>612 ms <span style="color:#9B9689;">· first reply</span></span><span style="display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;border:1px dashed #E6E1D6;font-size:11.5px;color:#6B6759;"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4"/></svg>price lookup · 38 ms</span></div>
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:center;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:34</span></div>
+  <div style="flex:1;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;background:#F1EEE6;font-size:12.5px;color:#6B6759;"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="5" cy="5" r="1.4"/><circle cx="10" cy="5" r="1.4"/><circle cx="15" cy="5" r="1.4"/><circle cx="5" cy="10" r="1.4"/><circle cx="10" cy="10" r="1.4"/><circle cx="15" cy="10" r="1.4"/><circle cx="5" cy="15" r="1.4"/><circle cx="10" cy="15" r="1.4"/><circle cx="15" cy="15" r="1.4"/></svg><span>Pressed 1 — wants the offer</span></div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:35</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#17160F;color:#F7F5EF;font-size:11.5px;font-weight:600;">Agent</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">जी बहुत अच्छा। हम आपको व्हाट्सऐप पर पूरी जानकारी भेज रहे हैं। केंद्र पर अपना नाम बताइएगा।</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"><span style="display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;background:#F1EEE6;font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#6B6759;"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>588 ms</span></div>
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:41</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#F1EEE6;color:#17160F;font-size:11.5px;font-weight:600;">Farmer</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">गेहूँ के लिए कौन सा बीज अच्छा रहेगा?</div>
+    
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:43</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#17160F;color:#F7F5EF;font-size:11.5px;font-weight:600;">Agent</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">गेहूँ के बीज की सलाह के लिए हमारे कृषि विशेषज्ञ आपको कॉल करेंगे, मैं उनका कॉलबैक बना देता हूँ।</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"><span style="display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;background:#F1EEE6;font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#6B6759;"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>640 ms</span><span style="display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;border:1px dashed #E6E1D6;font-size:11.5px;color:#6B6759;"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4"/></svg>call-back created</span></div>
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:50</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#F1EEE6;color:#17160F;font-size:11.5px;font-weight:600;">Farmer</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">ठीक है।</div>
+    
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:flex-start;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:51</span></div>
+  <div style="width:56px;flex:none;"><span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#17160F;color:#F7F5EF;font-size:11.5px;font-weight:600;">Agent</span></div>
+  <div style="flex:1;min-width:0;">
+    <div lang="hi" style="font-size:15px;line-height:1.65;">जी, आपका समय देने के लिए धन्यवाद। नमस्ते जी।</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"><span style="display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;background:#F1EEE6;font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#6B6759;"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>48 ms <span style="color:#9B9689;">· from cache</span></span></div>
+  </div>
+</div>
+<div style="display:flex;gap:14px;align-items:center;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:55</span></div>
+  <div style="flex:1;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;background:#F1EEE6;font-size:12.5px;color:#6B6759;"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M4 16l1-3.2A6.5 6.5 0 1 1 7.4 15z"/><path d="M8 8.5c.3 1.6 1.9 3.2 3.5 3.5l1-.9-1.2-.9-.6.5c-.6-.3-1.1-.8-1.4-1.4l.5-.6-.9-1.2z"/></svg><span>WhatsApp offer sent · template dap_offer_rabi</span></div>
+</div>
+<div style="display:flex;gap:14px;align-items:center;">
+  <div style="width:46px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#9B9689;letter-spacing:0;">00:58</span></div>
+  <div style="flex:1;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;background:#F1EEE6;font-size:12.5px;color:#6B6759;"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M4 3h3l1.5 4-2 1.5a10 10 0 0 0 5 5L13 11.5l4 1.5v3a1 1 0 0 1-1 1A14 14 0 0 1 3 4a1 1 0 0 1 1-1z"/></svg><span>Call ended by the farmer</span></div>
+</div></div>
+</div></div></div>
+  <div style="width:380px;flex:none;display:flex;flex-direction:column;gap:16px;"><div style="background:#FFFFFF;border:1px solid #E6E1D6;border-radius:12px;box-shadow:0 1px 2px rgba(23,22,15,.04);">
+<div style="padding:18px 22px 20px;display:flex;flex-direction:column;gap:14px;">
+  <div style="font-size:12.5px;color:#6B6759;font-weight:500;">Speed of reply</div>
+  <div style="display:flex;align-items:baseline;gap:10px;"><span style="font-family:'Instrument Serif',Georgia,'Times New Roman',serif;font-size:46px;line-height:1;letter-spacing:-.02em;">612</span><span style="font-size:18px;color:#6B6759;">ms</span><span style="font-size:12.5px;color:#6B6759;margin-left:auto;">first reply · target under 1,000</span></div>
+  <div style="font-size:12px;color:#6B6759;">Time from the farmer going quiet to hearing the agent, per turn. Scripted lines play from cache in about 50 ms.</div>
+  <div style="display:flex;flex-direction:column;gap:8px;">
+<div style="display:flex;align-items:center;gap:10px;">
+  <div style="width:42px;flex:none;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#6B6759;letter-spacing:0;">00:25</span></div>
+  <div style="flex:1;display:flex;height:14px;gap:2px;background:#F1EEE6;border-radius:4px;overflow:hidden;"><div style="width:2.40%;background:#86b6ef;"></div><div style="width:11.80%;background:#5598e7;"></div><div style="width:8.60%;background:#2a78d6;"></div><div style="width:25.80%;background:#1c5cab;"></div><div style="width:10.20%;background:#0d366b;"></div><div style="width:2.40%;background:#86b6ef;"></div><div style="flex:1;"></div></div>
+  <div style="width:56px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:0;">612 ms</span></div>
+</div>
+<div style="display:flex;align-items:center;gap:10px;">
+  <div style="width:42px;flex:none;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#6B6759;letter-spacing:0;">00:35</span></div>
+  <div style="flex:1;display:flex;height:14px;gap:2px;background:#F1EEE6;border-radius:4px;overflow:hidden;"><div style="width:2.20%;background:#86b6ef;"></div><div style="width:11.00%;background:#5598e7;"></div><div style="width:8.00%;background:#2a78d6;"></div><div style="width:25.00%;background:#1c5cab;"></div><div style="width:10.20%;background:#0d366b;"></div><div style="width:2.40%;background:#86b6ef;"></div><div style="flex:1;"></div></div>
+  <div style="width:56px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:0;">588 ms</span></div>
+</div>
+<div style="display:flex;align-items:center;gap:10px;">
+  <div style="width:42px;flex:none;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:11.5px;color:#6B6759;letter-spacing:0;">00:43</span></div>
+  <div style="flex:1;display:flex;height:14px;gap:2px;background:#F1EEE6;border-radius:4px;overflow:hidden;"><div style="width:2.40%;background:#86b6ef;"></div><div style="width:12.40%;background:#5598e7;"></div><div style="width:9.20%;background:#2a78d6;"></div><div style="width:27.00%;background:#1c5cab;"></div><div style="width:10.60%;background:#0d366b;"></div><div style="width:2.40%;background:#86b6ef;"></div><div style="flex:1;"></div></div>
+  <div style="width:56px;flex:none;text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:0;">640 ms</span></div>
+</div></div>
+  <div style="display:flex;justify-content:space-between;font-size:11px;color:#9B9689;padding-left:52px;padding-right:66px;"><span>0</span><span>500 ms</span><span>1 s</span></div>
+  <div style="border-top:1px solid #F1EEE6;padding-top:12px;display:flex;flex-direction:column;gap:6px;">
+    <div style="font-size:11.5px;color:#9B9689;">The 00:25 reply, by part</div><div style="display:flex;align-items:center;justify-content:space-between;font-size:12.5px;"><span style="display:inline-flex;align-items:center;gap:8px;color:#6B6759;"><span style="width:10px;height:10px;border-radius:3px;background:#86b6ef;"></span>Phone line in</span><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:0;">24 ms</span></div><div style="display:flex;align-items:center;justify-content:space-between;font-size:12.5px;"><span style="display:inline-flex;align-items:center;gap:8px;color:#6B6759;"><span style="width:10px;height:10px;border-radius:3px;background:#5598e7;"></span>Turn detection</span><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:0;">118 ms</span></div><div style="display:flex;align-items:center;justify-content:space-between;font-size:12.5px;"><span style="display:inline-flex;align-items:center;gap:8px;color:#6B6759;"><span style="width:10px;height:10px;border-radius:3px;background:#2a78d6;"></span>Speech to text</span><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:0;">86 ms</span></div><div style="display:flex;align-items:center;justify-content:space-between;font-size:12.5px;"><span style="display:inline-flex;align-items:center;gap:8px;color:#6B6759;"><span style="width:10px;height:10px;border-radius:3px;background:#1c5cab;"></span>Thinking</span><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:0;">258 ms</span></div><div style="display:flex;align-items:center;justify-content:space-between;font-size:12.5px;"><span style="display:inline-flex;align-items:center;gap:8px;color:#6B6759;"><span style="width:10px;height:10px;border-radius:3px;background:#0d366b;"></span>Voice</span><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:0;">102 ms</span></div><div style="display:flex;align-items:center;justify-content:space-between;font-size:12.5px;"><span style="display:inline-flex;align-items:center;gap:8px;color:#6B6759;"><span style="width:10px;height:10px;border-radius:3px;background:#86b6ef;"></span>Phone line out</span><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:0;">24 ms</span></div>
+  </div>
+</div></div><div style="background:#FFFFFF;border:1px solid #E6E1D6;border-radius:12px;box-shadow:0 1px 2px rgba(23,22,15,.04);"><div style="padding:16px 22px;display:flex;flex-direction:column;gap:10px;"><div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;"><span style="color:#6B6759;">Outcome</span><span style="text-align:right;"><span style="display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;background:#DDF0E3;color:#1C5E33;font-size:12px;font-weight:500;white-space:nowrap;"><span style="width:7px;height:7px;border-radius:50%;background:#3C9D5D;flex:none;"></span>Offer accepted · pressed 1</span></span></div><div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;"><span style="color:#6B6759;">Campaign</span><span style="text-align:right;"><span lang="hi">डीएपी ऑफ़र — रबी 2026</span></span></div><div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;"><span style="color:#6B6759;">Flow</span><span style="text-align:right;">Offer · v3</span></div><div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;"><span style="color:#6B6759;">Centre</span><span style="text-align:right;">Sitapur (NKSK-STP-01)</span></div><div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;"><span style="color:#6B6759;">Language</span><span style="text-align:right;">Hindi</span></div><div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;"><span style="color:#6B6759;">Voice</span><span style="text-align:right;">Bakbak · hi</span></div><div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;"><span style="color:#6B6759;">Follow-ups</span><span style="text-align:right;">WhatsApp sent · agronomist call-back</span></div><div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;"><span style="color:#6B6759;">Recording</span><span style="text-align:right;"><span style="font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:0;">0:58 · 480 KB · kept 90 days</span></span></div></div></div></div>
+</div>
+  </main>
+</div>
+</x-dc>
+</body>
+</html>

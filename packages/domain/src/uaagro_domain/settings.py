@@ -409,7 +409,19 @@ class Settings(BaseSettings):
     inbound_did: str | None = None
     outbound_cli_promotional: str | None = None
     outbound_cli_transactional: str | None = None
+    #: The DLT principal entity and the registered template promotional
+    #: traffic runs under (§13.1). Stamped on every campaign the panel
+    #: creates; without both, the compliance gate refuses to run it.
+    dlt_entity_id: str | None = None
+    dlt_template_id: str | None = None
     telephony_ws_token: str | None = None
+    #: Shared secret between the control plane and the voice worker's
+    #: ``/internal`` endpoints -- retrieval for the panel's "try a question",
+    #: speech rendering for the script preview. Unset means those endpoints
+    #: are closed, which is the right default for a worker on a public port.
+    internal_api_token: str | None = None
+    #: Where the control plane reaches the voice worker for those calls.
+    voice_worker_url: str = "http://localhost:8080"
     #: Signs and verifies provider webhooks (§17). Absent means webhooks are
     #: refused rather than trusted -- an unauthenticated webhook can mark a call
     #: answered or a consent granted.
@@ -644,6 +656,7 @@ class Settings(BaseSettings):
             "phone_hash_pepper": "the farmer phone lookup index",
             "jwt_signing_key": "admin session signing",
             "telephony_ws_token": "authenticating the telephony media WebSocket",
+            "internal_api_token": "authenticating the control plane to the voice worker",
         }
         for field, needed_for in required.items():
             self.require(field, needed_for=needed_for)

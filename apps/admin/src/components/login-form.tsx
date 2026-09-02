@@ -1,15 +1,19 @@
 "use client";
 
-import { useActionState } from "react";
+import { clsx } from "clsx";
+import { useTranslations } from "next-intl";
+import { useActionState, useState } from "react";
 
 import { authenticate, type LoginState } from "@/app/actions/auth";
+import { Field } from "@/components/ui/field";
+import { Icon } from "@/components/ui/icon";
 
 /**
- * The panel's front door (§15, §17).
+ * The panel's front door.
  *
- * Two steps, because §17 makes TOTP mandatory: credentials, then a code. On a
- * first sign-in the API returns an enrolment secret instead of a challenge,
- * and this shows it so the operator can add it to an authenticator.
+ * Two steps, because TOTP is mandatory: credentials, then a code. On a first
+ * sign-in the API returns an enrolment secret instead of a challenge, and
+ * this shows it so the operator can add it to an authenticator.
  *
  * One `useActionState` for both steps. The server action dispatches on the
  * step it is handed, so the state machine has a single source of truth -- a
@@ -21,59 +25,51 @@ import { authenticate, type LoginState } from "@/app/actions/auth";
  * sending an MFA secret to a third party to be rendered is exactly what MFA
  * exists to prevent. Every authenticator accepts a typed key.
  */
-export function LoginForm({
-  labels,
-}: {
-  labels: {
-    title: string;
-    email: string;
-    password: string;
-    submit: string;
-    mfaTitle: string;
-    mfaHint: string;
-    enrolTitle: string;
-    enrolHint: string;
-    secretLabel: string;
-    code: string;
-    verify: string;
-  };
-}) {
+export function LoginForm() {
+  const t = useTranslations("login");
   const [state, action, pending] = useActionState<LoginState, FormData>(authenticate, {
     step: "credentials",
   });
 
   if (state.step === "credentials") {
     return (
-      <form action={action} className="mx-auto mt-16 w-full max-w-sm">
-        <h1 className="mb-4 text-lg font-semibold">{labels.title}</h1>
-        <label className="mb-3 block">
-          <span className="mb-1 block text-sm text-muted">{labels.email}</span>
-          <input
-            type="email"
-            name="email"
-            autoComplete="username"
-            required
-            className="w-full rounded border border-slate-300 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-900"
-          />
-        </label>
-        <label className="mb-4 block">
-          <span className="mb-1 block text-sm text-muted">{labels.password}</span>
+      <form action={action} className="flex w-[420px] max-w-full flex-col gap-5.5">
+        <div>
+          <h1 className="font-serif text-title-lg font-normal">{t("title")}</h1>
+          <p className="mt-2 text-base text-muted">{t("intro")}</p>
+        </div>
+
+        <Field label={t("email")}>
+          <input type="email" name="email" autoComplete="username" required className={loginInput} />
+        </Field>
+        <Field label={t("password")}>
           <input
             type="password"
             name="password"
             autoComplete="current-password"
             required
-            className="w-full rounded border border-slate-300 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-900"
+            className={loginInput}
           />
-        </label>
-        <button
-          type="submit"
-          disabled={pending}
-          className="w-full rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40 dark:border-slate-700 dark:hover:bg-slate-800"
-        >
-          {labels.submit}
+        </Field>
+
+        <button type="submit" disabled={pending} className={submitClass}>
+          {t("continue")}
         </button>
-        {state.error ? <p className="mt-3 text-sm text-danger">{state.error}</p> : null}
+        {state.error ? <Problem>{state.error}</Problem> : null}
+
+        <p className="flex items-center gap-2 text-small text-muted">
+          <Icon name="shield" size={14} />
+          {t("policy")}
+        </p>
+
+        <div className="flex flex-col gap-3 border-t border-line pt-5.5">
+          <div className="flex items-baseline justify-between">
+            <span className="font-semibold">{t("thenCode")}</span>
+            <span className="text-label text-faint">{t("stepTwo")}</span>
+          </div>
+          <CodeBoxes digits="" active={false} />
+          <p className="text-small text-muted">{t("codeHint")}</p>
+        </div>
       </form>
     );
   }
@@ -81,44 +77,91 @@ export function LoginForm({
   const enrolling = state.step === "enrol";
 
   return (
-    <form action={action} className="mx-auto mt-16 w-full max-w-sm">
-      <h1 className="mb-2 text-lg font-semibold">
-        {enrolling ? labels.enrolTitle : labels.mfaTitle}
-      </h1>
-      <p className="mb-4 text-sm text-muted">
-        {enrolling ? labels.enrolHint : labels.mfaHint}
-      </p>
+    <form action={action} className="flex w-[420px] max-w-full flex-col gap-5.5">
+      <div>
+        <h1 className="font-serif text-title-lg font-normal">
+          {enrolling ? t("enrolTitle") : t("mfaTitle")}
+        </h1>
+        <p className="mt-2 text-base text-muted">{enrolling ? t("enrolHint") : t("mfaHint")}</p>
+      </div>
 
       {enrolling ? (
-        <div className="mb-4">
-          <span className="mb-1 block text-sm text-muted">{labels.secretLabel}</span>
-          <code className="block break-all rounded border border-slate-200 bg-slate-50 p-2 text-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-col gap-[5px]">
+          <span className="text-label text-muted">{t("secretLabel")}</span>
+          <code className="block break-all rounded-panel border border-line bg-inset px-3.5 py-3 font-mono text-ui">
             {state.secret}
           </code>
         </div>
       ) : null}
 
-      <label className="mb-4 block">
-        <span className="mb-1 block text-sm text-muted">{labels.code}</span>
-        <input
-          type="text"
-          name="code"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          pattern="[0-9]{6}"
-          maxLength={6}
-          required
-          className="w-full rounded border border-slate-300 px-2 py-1.5 font-mono tracking-widest dark:border-slate-700 dark:bg-slate-900"
-        />
-      </label>
-      <button
-        type="submit"
-        disabled={pending}
-        className="w-full rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40 dark:border-slate-700 dark:hover:bg-slate-800"
-      >
-        {labels.verify}
+      <CodeInput label={t("code")} />
+
+      <button type="submit" disabled={pending} className={submitClass}>
+        {t("verify")}
       </button>
-      {state.error ? <p className="mt-3 text-sm text-danger">{state.error}</p> : null}
+      {state.error ? <Problem>{state.error}</Problem> : null}
+      <p className="text-small text-muted">{t("codeHint")}</p>
     </form>
+  );
+}
+
+const loginInput =
+  "w-full rounded-panel border border-line bg-surface px-3.5 py-3 text-prose text-ink placeholder:text-faint focus:border-ink focus:outline-none";
+
+const submitClass =
+  "rounded-panel bg-ink px-3.5 py-3.5 text-prose font-semibold text-paper transition-colors hover:bg-ink/90 disabled:cursor-not-allowed disabled:opacity-50";
+
+function Problem({ children }: { children: string }) {
+  return (
+    <p role="alert" className="text-ui text-red-text">
+      {children}
+    </p>
+  );
+}
+
+/**
+ * Six boxes over one real input. The input is transparent and covers the
+ * boxes, so typing, pasting and autofill all work as they would in a plain
+ * field; the boxes only draw what it holds and outline the next slot.
+ */
+function CodeInput({ label }: { label: string }) {
+  const [value, setValue] = useState("");
+  const digits = value.replace(/\D/g, "").slice(0, 6);
+
+  return (
+    <div className="relative">
+      <input
+        name="code"
+        value={digits}
+        onChange={(event) => setValue(event.target.value)}
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        pattern="[0-9]{6}"
+        maxLength={6}
+        required
+        autoFocus
+        aria-label={label}
+        className="absolute inset-0 h-full w-full cursor-text opacity-0"
+      />
+      <CodeBoxes digits={digits} active />
+    </div>
+  );
+}
+
+function CodeBoxes({ digits, active }: { digits: string; active: boolean }) {
+  return (
+    <div className="flex gap-2.5" aria-hidden="true">
+      {Array.from({ length: 6 }, (_, index) => (
+        <div
+          key={index}
+          className={clsx(
+            "flex h-14 w-14 items-center justify-center rounded-panel border bg-surface font-mono text-digit",
+            active && index === digits.length ? "border-ink" : "border-line",
+          )}
+        >
+          {digits[index] ?? ""}
+        </div>
+      ))}
+    </div>
   );
 }
