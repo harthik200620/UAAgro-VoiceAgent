@@ -56,7 +56,7 @@ export function AttentionList({ items }: { items: AttentionItem[] }) {
               href && "-mx-2 rounded-panel px-2 hover:bg-paper",
             );
             return (
-              <li key={`${item.kind}-${item.href ?? index}`}>
+              <li key={`${item.kind}-${index}`}>
                 {href ? (
                   <Link href={href} className={className}>
                     {body}
