@@ -330,6 +330,25 @@ async def test_the_script_can_end_the_call_from_our_side(monkeypatch: pytest.Mon
     assert feed.of(livefeed.CALL_ENDED)[0].payload["outcome"] == "offer_accepted"
 
 
+async def test_the_pipeline_can_end_a_silent_call_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§11.4: the silence ladder ran out. The pipeline names the outcome and
+    the session records it, whatever the responder thinks."""
+    monkeypatch.setattr(session_module, "HANGUP_GRACE_S", 0.0)
+    transport, repo, feed, pipeline = _Transport(), _Repository(), _Feed(), _Pipeline()
+    session = _session(transport, repo, feed, pipeline)
+    running = asyncio.create_task(session.run())
+    transport.frame(_start_frame())
+    await _settle()
+
+    pipeline.call_outcome = CallOutcome.ABANDONED_SILENCE  # type: ignore[attr-defined]
+    await pipeline.on_call_over()
+    await asyncio.wait_for(running, timeout=2.0)
+
+    assert session.status is CallStatus.COMPLETED
+    assert session.outcome is CallOutcome.ABANDONED_SILENCE
+    assert "hangup" in repo.events
+
+
 async def test_media_still_flows_to_the_pipeline() -> None:
     transport, repo, feed, pipeline = _Transport(), _Repository(), _Feed(), _Pipeline()
     session = _session(transport, repo, feed, pipeline)

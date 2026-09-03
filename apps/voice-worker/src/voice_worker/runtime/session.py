@@ -974,9 +974,13 @@ class CallSession:
         """The script has said its last line: end the call from our side."""
         if self._hangup.is_set():
             return
-        responder = getattr(self._pipeline, "responder", None)
-        result = getattr(responder, "result", None)
-        decided = getattr(result, "call_outcome", None)
+        # The pipeline ended the call itself (the silence ladder ran out), or
+        # the responder did (a goodbye, a script's closing line).
+        decided = getattr(self._pipeline, "call_outcome", None)
+        if not isinstance(decided, CallOutcome):
+            responder = getattr(self._pipeline, "responder", None)
+            result = getattr(responder, "result", None)
+            decided = getattr(result, "call_outcome", None)
         if isinstance(decided, CallOutcome):
             self.outcome = decided
         await asyncio.sleep(HANGUP_GRACE_S)

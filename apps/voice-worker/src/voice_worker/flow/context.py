@@ -213,6 +213,13 @@ class ConversationMemory:
                 return
         self.add("assistant", text)
 
+    def last_assistant_text(self) -> str | None:
+        """What the agent said last, for the closing rule."""
+        for turn in reversed(self.turns):
+            if turn.role == "assistant":
+                return turn.text
+        return None
+
     def drop_last_user(self) -> None:
         """A turn the model was asked about and never answered.
 

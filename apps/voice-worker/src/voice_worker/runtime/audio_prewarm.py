@@ -47,9 +47,16 @@ def fixed_phrases() -> tuple[str, ...]:
     """
     # From the validator, which is where it is defined -- `flow.agent`
     # re-imports it but does not re-export it.
+    from ..flow.closing import CLOSING_LINE_HI, SILENCE_PROMPT_HI, SILENCE_WARN_HI
     from ..flow.validator import FALLBACK_SCRIPT_HI
 
-    return (SAFETY_SCRIPT_HI, FALLBACK_SCRIPT_HI)
+    return (
+        SAFETY_SCRIPT_HI,
+        FALLBACK_SCRIPT_HI,
+        SILENCE_PROMPT_HI,
+        SILENCE_WARN_HI,
+        CLOSING_LINE_HI,
+    )
 
 
 async def prewarm(

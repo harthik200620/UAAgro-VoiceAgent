@@ -59,13 +59,14 @@ from ..adapters.factory import SpeechStack, build_speech_stack
 from ..adapters.llm.gateway import LlmGateway, build_gateway
 from ..flow.address import AddressBudget, name_forms
 from ..flow.agent import Agent
+from ..flow.closing import SILENCE_PROMPT_HI, SILENCE_WARN_HI
 from ..flow.context import CallerContext, ContextBuilder, DynamicHint
 from ..flow.escalation import EscalationEngine
 from ..flow.state import CallFlow
 from ..flow.validator import OutputValidator
 from ..outbound.responder import OutboundResponder
 from ..outbound.script import OutboundScript
-from ..pipelines.conversation import ConversationPipeline
+from ..pipelines.conversation import ConversationPipeline, SilenceLadder
 from ..runtime.audio_cache import AudioCache
 from ..runtime.playback import BargeInPolicy, PacedSender
 from ..runtime.vad import build_voice_gate
@@ -530,6 +531,9 @@ async def build_call_pipeline(
                 # not documents kept for the helpline.
                 direction=CallDirection.OUTBOUND.value,
             )
+            # The script decides when an outbound call is over; a farmer's
+            # "धन्यवाद" mid-questions is answered by the script's own turn.
+            agent.closes_calls = False
         responder = OutboundResponder(
             script=OutboundScript.from_config(agent_settings.script),
             farmer_name=caller.name,
@@ -556,6 +560,7 @@ async def build_call_pipeline(
             direction=CallDirection.INBOUND.value,
         )
         responder = agent
+        agent.closing_line = agent_settings.closing_template or agent.closing_line
         opening = render_greeting(agent_settings.greeting_template, caller)
         # The model is told it has already greeted the caller by name. Left
         # out, its first reply greeted them again -- and the name, once more,
@@ -574,7 +579,18 @@ async def build_call_pipeline(
         # Decides on the audio whether the caller is talking, so a fan or
         # the agent's own echo cannot interrupt it and a person can.
         voice_gate=build_voice_gate(),
+        silence=SilenceLadder.from_settings(defaults.call_handling),
     )
+
+    # The goodbye and the silence prompts, rendered now so that saying them
+    # later is a cache hit: the goodbye is the one line a farmer is already
+    # putting the phone down for, and a synthesiser round trip there is
+    # silence they will not wait through. Detached: a call that ends before
+    # this finishes simply synthesises on demand.
+    closing = agent_settings.closing_template or (
+        responder.closing_line if hasattr(responder, "closing_line") else ""
+    )
+    pipeline.render_later(closing, SILENCE_PROMPT_HI, SILENCE_WARN_HI)
 
     greeting_pcm = await _greeting_audio(opening, stack, audio_cache)
 

@@ -143,6 +143,11 @@ class OutboundResponder:
         """Spoken before the farmer says anything: disclosure and identity."""
         return self.script.rendered_opening(name=self.farmer_name)
 
+    @property
+    def closing_line(self) -> str:
+        """What the silence ladder says before hanging up on a quiet line."""
+        return self.script.closing
+
     async def respond(self, transcript: str, *, language: str) -> AsyncIterator[str]:
         if self.call_over:
             return

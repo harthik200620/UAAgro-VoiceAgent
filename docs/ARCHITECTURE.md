@@ -867,6 +867,23 @@ the synthesiser says them right, and the textbook words (उर्वरक, म
 उपलब्ध, मात्रा, प्रतीक्षा अवधि) banned. The greeting says सेंटर; the transfer
 line says सेंटर मैनेजर.
 
+**The call ends.** It did not, before 3 September: the inbound agent had no
+notion of being finished, so a farmer's "बस, धन्यवाद" was answered with
+another question and the line stayed open until they hung up. Three ways it
+ends now, all landing on the same `on_call_over` the outbound script already
+used. A goodbye -- `flow/closing.py` knows the ways farmers say it, and
+knows that "ठीक है" alone or "नमस्ते" with a question after it is not one
+-- is answered with the published `closing_template` straight from the
+audio cache, without the model, because a second of silence before
+"नमस्ते" is the one place a farmer would already have put the phone down.
+A plain "नहीं" is a goodbye only when the agent had just asked whether
+there was anything more. And §11.4's silence ladder now exists in the
+pipeline: a prompt at 6 s of silence, another at 15 s, the goodbye and a
+hang-up at 25 s, recorded as `abandoned_silence`; anything the caller does
+-- a voice at the gate, a word from the recogniser -- starts it over. In
+every case the line drops only after the goodbye has been paced out to its
+last frame, plus the provider's jitter.
+
 **What the browser page proved and what it cannot.** The hiss under every
 word was the page, not the voice: an 8 kHz buffer handed to a 48 kHz audio
 graph, which Chrome upsamples by linear interpolation. The context runs at

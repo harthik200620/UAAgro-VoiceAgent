@@ -48,11 +48,13 @@ from typing import Any, Protocol
 
 import structlog
 
-from uaagro_domain.settings import Defaults
+from uaagro_domain.enums import CallOutcome
+from uaagro_domain.settings import CallHandlingSettings, Defaults
 
 from ..adapters.factory import SpeechStack
 from ..adapters.stt.base import SttEvent, SttEventType
 from ..flow.address import is_backchannel
+from ..flow.closing import CLOSING_LINE_HI, SILENCE_PROMPT_HI, SILENCE_WARN_HI
 from ..runtime.audio_cache import AudioCache
 from ..runtime.metrics import CallLatency, TurnMetrics
 from ..runtime.playback import BargeInPolicy, PacedSender, handle_barge_in
@@ -99,6 +101,37 @@ FIRST_CLAUSE_WORDS = 3
 #: A sentence the farmer heard at least this much of is not repeated when
 #: the agent resumes; anything less is spoken again from the start.
 HEARD_ENOUGH = 0.6
+
+
+@dataclass(frozen=True, slots=True)
+class SilenceLadder:
+    """§11.4: what happens when the caller goes quiet, in seconds of silence.
+
+    Prompt, prompt again, then say goodbye and hang up. Rural callers walk
+    off to read a label and lines drop a second of audio, so the first two
+    rungs are patient; the last one exists because a call nobody is on
+    still costs a line and a worker slot.
+    """
+
+    prompt_s: float = 6.0
+    warn_s: float = 15.0
+    close_s: float = 25.0
+
+    @classmethod
+    def from_settings(cls, handling: CallHandlingSettings) -> SilenceLadder:
+        return cls(
+            prompt_s=float(handling.silence_first_prompt_s),
+            warn_s=float(handling.silence_second_prompt_s),
+            close_s=float(handling.silence_abandon_s),
+        )
+
+    def stages(self) -> tuple[tuple[float, str | None], ...]:
+        """(seconds of silence, what to say) -- ``None`` means hang up."""
+        return (
+            (self.prompt_s, SILENCE_PROMPT_HI),
+            (self.warn_s, SILENCE_WARN_HI),
+            (self.close_s, None),
+        )
 
 
 class Responder(Protocol):
@@ -192,6 +225,12 @@ class ConversationPipeline:
     #: the recogniser's speech-start is trusted on its own -- the shape the
     #: scripted tests use, and the shape a route without audio access has.
     voice_gate: VoiceGate | None = None
+    #: What to do when the caller goes quiet. ``None`` means wait forever,
+    #: which is what the scripted tests want and no live call does.
+    silence: SilenceLadder | None = None
+    #: Set by the pipeline when it ended the call itself -- the silence
+    #: ladder ran out. The session prefers it to the responder's verdict.
+    call_outcome: CallOutcome | None = None
 
     latency: CallLatency = field(default_factory=CallLatency)
     turns: list[TurnOutcome] = field(default_factory=list)
@@ -229,10 +268,16 @@ class ConversationPipeline:
     #: and 1.5 s on a bad one, and paying it *between* sentences put that
     #: much silence in the middle of every answer.
     _ahead: dict[str, asyncio.Task[bytes | None]] = field(default_factory=dict, repr=False)
+    #: Fixed lines rendering into the cache; held so they are not collected.
+    _background: set[asyncio.Task[bytes | None]] = field(default_factory=set, repr=False)
     _partial_since_cut: bool = False
     #: The current recognition began by interrupting the agent. Decides
     #: what a bare "हाँ" means when it arrives.
     _cut_pending: bool = False
+    _silence_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _silence_stage: int = 0
+    #: The goodbye is being said; nothing else starts.
+    _ending: bool = False
     _closed: bool = False
 
     # -- audio in --------------------------------------------------------- #
@@ -246,8 +291,15 @@ class ConversationPipeline:
         self._turn_audio.extend(pcm)
         if self.voice_gate is not None:
             for event in self.voice_gate.feed(pcm):
-                if event is VoiceEvent.SPEECH_START and self._agent_speaking:
-                    await self._interrupt("voice")
+                if event is VoiceEvent.SPEECH_START:
+                    self._cancel_silence_watch()
+                    if self._agent_speaking:
+                        await self._interrupt("voice")
+                elif event is VoiceEvent.SPEECH_END and self._listening():
+                    # The caller made a sound and stopped, and the recogniser
+                    # may make nothing of it. The clock on their silence
+                    # starts again from here rather than never.
+                    self._start_silence_watch()
         await self.stack.stt.send_audio(pcm)
 
     # -- the loop --------------------------------------------------------- #
@@ -264,6 +316,9 @@ class ConversationPipeline:
         await self.wait_idle()
 
     async def _handle(self, event: SttEvent) -> None:
+        if event.type is not SttEventType.ERROR:
+            # Anything the recogniser heard is the caller, not silence.
+            self._cancel_silence_watch()
         match event.type:
             case SttEventType.SPEECH_STARTED:
                 await self._on_speech_started()
@@ -562,6 +617,7 @@ class ConversationPipeline:
             log.info("pipeline.nod_after_cut", words=len(script_words(transcript)))
             await self._discard_speculation("nod")
             self._finish_turn(metrics, outcome)
+            self._start_silence_watch()
             return
         if remainder and self._may_resume() and nod:
             # "हाँ" while the agent was mid-answer is a listener, not a
@@ -576,6 +632,7 @@ class ConversationPipeline:
 
         if not transcript:
             self._finish_turn(metrics, outcome)
+            self._start_silence_watch()
             return
 
         self._activity("thinking")
@@ -737,9 +794,86 @@ class ConversationPipeline:
             self._finish_turn(metrics, outcome)
 
     async def _end_call_if_asked(self) -> None:
-        if self.on_call_over is None or not getattr(self.responder, "call_over", False):
+        """The responder said its last line and it has been played: hang up.
+
+        Reached from the answer task after `_stream_answer` returns, which
+        is after the sender has paced out the last frame of the goodbye --
+        the farmer hears all of "धन्यवाद, नमस्ते" and *then* the line ends.
+        """
+        if not getattr(self.responder, "call_over", False):
             return
+        self._ending = True
+        self._cancel_silence_watch()
+        if self.on_call_over is None:
+            return
+        log.info("pipeline.call_over", by="responder")
         await self.on_call_over()
+
+    # -- the silence ladder (§11.4) ---------------------------------------- #
+
+    def _listening(self) -> bool:
+        """Nothing is being said and nothing is being prepared."""
+        if self._agent_speaking or self._ending:
+            return False
+        task = self._answer_task
+        return task is None or task.done()
+
+    def _start_silence_watch(self) -> None:
+        """Start the clock on the caller's silence, if it is not running."""
+        if self.silence is None or self._closed or self._ending:
+            return
+        if self._silence_task is not None and not self._silence_task.done():
+            return
+        self._silence_task = asyncio.create_task(self._watch_silence())
+
+    def _cancel_silence_watch(self) -> None:
+        """The caller did something: the ladder starts over next time."""
+        task = self._silence_task
+        self._silence_task = None
+        self._silence_stage = 0
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _watch_silence(self) -> None:
+        """Prompt, prompt again, then say goodbye and hang up.
+
+        One task for the whole ladder. Its own prompts do not reset it --
+        the agent talking is not the caller talking -- and it runs on to the
+        next rung after each one. Anything the caller does cancels it.
+        """
+        assert self.silence is not None
+        stages = self.silence.stages()
+        elapsed = 0.0
+        try:
+            while self._silence_stage < len(stages):
+                at, phrase = stages[self._silence_stage]
+                wait = at - elapsed
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                elapsed = at
+                self._silence_stage += 1
+                if phrase is not None:
+                    log.info("pipeline.silence_prompt", stage=self._silence_stage, after_s=at)
+                    await self.announce(phrase)
+                    continue
+                await self._close_for_silence(at)
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - a watchdog must never end a call
+            log.warning("pipeline.silence_watch_failed", error=type(exc).__name__)
+
+    async def _close_for_silence(self, after_s: float) -> None:
+        """Nobody is there: say goodbye and end the call (§11.4)."""
+        if self._ending or self._closed:
+            return
+        self._ending = True
+        self.call_outcome = CallOutcome.ABANDONED_SILENCE
+        log.info("pipeline.call_over", by="silence", after_s=after_s)
+        closing = getattr(self.responder, "closing_line", None) or CLOSING_LINE_HI
+        await self.announce(str(closing))
+        if self.on_call_over is not None:
+            await self.on_call_over()
 
     def _activity(self, state: str) -> None:
         if self.on_activity is None:
@@ -862,6 +996,7 @@ class ConversationPipeline:
 
     def _end_playback(self, outcome: TurnOutcome) -> None:
         self._agent_speaking = False
+        self._start_silence_watch()
         outcome.spoken = self.sender.tracker.spoken_text()
         if self.sender.cancelled:
             outcome.interrupted = True
@@ -904,6 +1039,21 @@ class ConversationPipeline:
                 return sentences[index + 1 :]
             return sentences[index:]
         return []
+
+    def render_later(self, *lines: str) -> None:
+        """Render fixed lines into the cache in the background.
+
+        For the goodbye and the silence prompts: known at build time, said
+        once if at all, and wanted instantly when they are. Kept separate
+        from `_render_ahead` so that ending an answer does not cancel them.
+        """
+        for line in lines:
+            for sentence in split_sentences(line):
+                speakable = text_for_speech(sentence, language=self.stack.tts_config.language)
+                if speakable:
+                    task = asyncio.create_task(self._render(speakable))
+                    self._background.add(task)
+                    task.add_done_callback(self._background.discard)
 
     def _render_ahead(self, sentence: str) -> None:
         """Start synthesising a sentence that will be spoken after the current one.
@@ -1097,6 +1247,8 @@ class ConversationPipeline:
                 for t in (self._answer_task, self._opening_task, self._resume_watchdog)
                 if t is not None
             ]
+            if self._agent_speaking and self._silence_task is not None:
+                tasks.append(self._silence_task)
             if not any(not t.done() for t in tasks):
                 return
             await asyncio.sleep(0.005)
@@ -1106,9 +1258,10 @@ class ConversationPipeline:
     async def close(self) -> None:
         self._closed = True
         self._cancel_resume_watchdog()
+        self._cancel_silence_watch()
         self._cancel_ahead()
         await self._discard_speculation("call ended")
-        for task in (self._answer_task, self._opening_task):
+        for task in (self._answer_task, self._opening_task, self._silence_task):
             if task is not None and not task.done():
                 self.sender.cancel()
                 task.cancel()

@@ -70,8 +70,18 @@ Expect, in order:
    transfer request: the voice worker log line `call.transfer_failed` names
    the error, and the request shape in `adapters/telephony/control.py` is the
    thing to check against Exotel's current API.
-6. Hang up. Within a minute the call page shows the transcript, every turn
-   with its latency, the time to first reply, and the recording.
+6. Say "बस, धन्यवाद" (or answer "नहीं" when it asks "और कुछ पूछना है?").
+   Expect the closing line -- "धन्यवाद! और कुछ पूछना हो तो कभी भी फ़ोन
+   कीजिए। नमस्ते।" -- played to the end, and then the call ending from our
+   side without you hanging up. On Exotel that is the Voicebot applet
+   finishing and the Hangup applet after it running; `call.hangup_by_agent`
+   appears in the worker log. Then, on another call, say nothing after an
+   answer: expect "जी, मैं सुन रहा हूँ" after 6 s, "और कुछ पूछना हो तो बताइए"
+   after 15 s, and the closing line and a hang-up at 25 s, recorded as
+   `abandoned_silence`.
+7. Hang up yourself on a third call. Within a minute the call page shows
+   the transcript, every turn with its latency, the time to first reply,
+   and the recording.
 
 Write down the **time to first reply** and the **p95 turn latency** the call
 page shows. The target from the brief is 500 ms to 1 s including the

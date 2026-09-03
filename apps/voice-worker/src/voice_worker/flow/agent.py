@@ -30,11 +30,12 @@ from typing import Any
 
 import structlog
 
-from uaagro_domain.enums import Intent, TransferReason
+from uaagro_domain.enums import CallOutcome, Intent, TransferReason
 
 from ..text.speech import FIRST_CLAUSE_WORDS, SentenceBuffer, split_sentences
 from ..tools.base import ToolContext, ToolRegistry, ToolResult
 from .address import AddressBudget, trim_address
+from .closing import CLOSING_LINE_HI, farmer_is_done
 from .context import CallerContext, ContextBuilder, ConversationMemory, DynamicHint
 from .escalation import EscalationDecision, EscalationEngine, TransferRequest, TurnSignals
 from .intents import classify_by_rule, reconcile
@@ -123,6 +124,18 @@ class _Prepared:
     asr_confidence: float | None
 
 
+@dataclass(frozen=True, slots=True)
+class ClosedCall:
+    """What the agent decided when it ended the call, for the call record.
+
+    The same shape the outbound script leaves behind, because the session
+    reads ``responder.result.call_outcome`` when the pipeline says the call
+    is over, and one reader is better than two.
+    """
+
+    call_outcome: CallOutcome
+
+
 @dataclass
 class Agent:
     """One call's DISCOVER ⇄ RESOLVE handler."""
@@ -145,6 +158,17 @@ class Agent:
     #: The pipeline may continue an interrupted answer when what interrupted
     #: it was only "हाँ". A scripted responder says no; this one says yes.
     resumes_after_backchannel: bool = True
+    #: What the agent says when the farmer is done: the published
+    #: ``closing_template``. Spoken from cache, never generated.
+    closing_line: str = CLOSING_LINE_HI
+    #: Whether a goodbye ends the call. True on the helpline; False when this
+    #: agent answers questions behind the outbound script, which has its own
+    #: idea of when the call is over.
+    closes_calls: bool = True
+    #: Set once the closing line has been handed to the pipeline (§11.1
+    #: CLOSE). The pipeline hangs up after it has been spoken.
+    call_over: bool = False
+    result: ClosedCall | None = None
     #: The most recent finished turn. `respond` streams text and cannot return
     #: a result, so the escalation decision and validation outcome are left
     #: here for whatever needs them after the words have gone out.
@@ -161,6 +185,8 @@ class Agent:
         safety path that fired on one and not the other would be the worst bug
         this file could carry.
         """
+        if self._closes_on(transcript):
+            return self._close(transcript)
         fixed, prepared = await self._prepare(transcript, asr_confidence=asr_confidence)
         if fixed is not None:
             return fixed
@@ -378,6 +404,28 @@ class Agent:
         kept = [trim_address(s, scratch) for s in split_sentences(text)]
         return " ".join(s for s in kept if s).strip(), scratch.sir_used
 
+    # -- ending the call ------------------------------------------------------ #
+
+    def _closes_on(self, transcript: str) -> bool:
+        if not self.closes_calls or self.call_over:
+            return False
+        return farmer_is_done(transcript, last_agent_line=self.memory.last_assistant_text())
+
+    def _close(self, transcript: str) -> TurnResult:
+        """Say goodbye and mark the call resolved (§11.1 CLOSE)."""
+        self.memory.add("user", transcript)
+        self.memory.add("assistant", self.closing_line)
+        self.call_over = True
+        self.result = ClosedCall(call_outcome=CallOutcome.RESOLVED)
+        log.info("agent.closing", turns=len(self.memory.turns) // 2)
+        self.last_turn = TurnResult(
+            text=self.closing_line,
+            intent=Intent.OUT_OF_SCOPE,
+            cached=True,
+            ends_agent_turns=True,
+        )
+        return self.last_turn
+
     # -- what the pipeline tells the agent ----------------------------------- #
 
     def note_interruption(self, heard: str) -> None:
@@ -512,6 +560,13 @@ class Agent:
         failure stops there and hands over -- a partial true answer plus a
         handover, rather than a retraction.
         """
+        if self._closes_on(transcript):
+            # "बस, धन्यवाद" is not a question. The goodbye comes from the
+            # published config and the audio cache, not from the model --
+            # a second of silence before "नमस्ते" is the one place a farmer
+            # would already have put the phone down.
+            yield self._close(transcript).text
+            return
         fixed, prepared = await self._prepare(transcript)
         if fixed is not None:
             yield fixed.text
@@ -730,4 +785,4 @@ def _nothing_found(results: Sequence[ToolResult]) -> bool:
     return all(not r.ok or not r.data or r.data.get("answered") is False for r in results)
 
 
-__all__ = ("Agent", "IntentClassifier", "TurnResult")
+__all__ = ("Agent", "ClosedCall", "IntentClassifier", "TurnResult")
