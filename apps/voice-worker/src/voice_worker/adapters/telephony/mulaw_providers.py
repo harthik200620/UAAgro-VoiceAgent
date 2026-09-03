@@ -120,9 +120,7 @@ class MulawSerializer(TelephonySerializer):
             or _text(payload.get("stream_sid"))
         )
         if stream_sid is None:
-            log.warning(
-                "telephony.start_without_stream_sid", provider=self.provider.value
-            )
+            log.warning("telephony.start_without_stream_sid", provider=self.provider.value)
             return InboundEvent(type=InboundEventType.UNKNOWN, raw=payload)
 
         metadata = CallMetadata(
@@ -137,9 +135,7 @@ class MulawSerializer(TelephonySerializer):
         # written the `calls` row, and the Exotel serializer has the same
         # contract -- a serializer that bound itself would work with one call
         # site and silently not with the other.
-        return InboundEvent(
-            type=InboundEventType.START, metadata=metadata, raw=payload
-        )
+        return InboundEvent(type=InboundEventType.START, metadata=metadata, raw=payload)
 
     def _decode_media(self, payload: dict[str, Any]) -> InboundEvent:
         media = payload.get("media")
@@ -157,9 +153,7 @@ class MulawSerializer(TelephonySerializer):
         # Decoded to PCM at the boundary, so nothing downstream has to know
         # which provider this call came in on. That is the whole point of the
         # serializer: the pipeline sees one audio format.
-        return InboundEvent(
-            type=InboundEventType.MEDIA, audio=mulaw_to_pcm(mulaw), raw=payload
-        )
+        return InboundEvent(type=InboundEventType.MEDIA, audio=mulaw_to_pcm(mulaw), raw=payload)
 
     def _decode_dtmf(self, payload: dict[str, Any]) -> InboundEvent:
         dtmf = payload.get("dtmf")

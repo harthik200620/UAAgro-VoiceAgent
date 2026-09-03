@@ -77,6 +77,7 @@ async def _noop() -> None:
     """Nothing. Lets the breaker act purely as an admission check."""
     return None
 
+
 DEFAULT_WS_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
 
 CONNECT_TIMEOUT_S = 5.0

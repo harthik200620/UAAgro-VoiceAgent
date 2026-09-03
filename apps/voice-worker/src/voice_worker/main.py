@@ -847,6 +847,10 @@ async def voice_stream(websocket: WebSocket) -> None:
     settings = get_settings()
     serializer = _build_serializer(settings.telephony_provider)
     persist = not websocket.query_params.get("no_persist")
+    # The browser test page announces itself. Its calls are recorded as
+    # simulator calls: kept, listed, playable, and counted apart from real
+    # traffic so a demo never inflates the day's numbers.
+    from_browser = websocket.query_params.get("source") == "browser"
     repository = SqlCallRepository() if persist else NullCallRepository()
     # `calls.organization_id` is NOT NULL, so a persisted call needs this
     # before its first row is written -- and the row is written from the start
@@ -869,6 +873,7 @@ async def voice_stream(websocket: WebSocket) -> None:
         live_feed=state.live_feed,
         our_numbers=OurNumbers.from_settings(settings),
         transfer_adapter=_transfer_adapter,
+        provider=TelephonyProvider.SIMULATOR if from_browser else None,
     )
 
     task = asyncio.current_task()

@@ -60,9 +60,10 @@ async def test_the_name_and_the_filler_never_reach_the_synthesiser() -> None:
 
     pieces = await collect(agent, "डीएपी है क्या")
 
-    assert pieces == ["डीएपी उपलब्ध है।", "बोरी पचास किलो की है।"], pieces
+    # "उपलब्ध" leaves as the spoken "स्टॉक में" (text/register.py).
+    assert pieces == ["डीएपी स्टॉक में है।", "बोरी पचास किलो की है।"], pieces
     # And the memory holds the words that were spoken, not the model's draft.
-    assert agent.memory.turns[-1].text == "डीएपी उपलब्ध है। बोरी पचास किलो की है।"
+    assert agent.memory.turns[-1].text == "डीएपी स्टॉक में है। बोरी पचास किलो की है।"
 
 
 async def test_running_long_stops_quietly_instead_of_handing_over() -> None:
@@ -87,23 +88,23 @@ async def test_sir_survives_twice_and_is_then_trimmed() -> None:
 
     pieces = await collect(agent, "डीएपी है क्या")
 
-    assert pieces == ["सर, डीएपी उपलब्ध है।", "यूरिया भी है सर।", "बोरी पचास किलो की है।"]
+    assert pieces == ["सर, डीएपी स्टॉक में है।", "यूरिया भी है सर।", "बोरी पचास किलो की है।"]
 
 
 async def test_the_memory_records_an_interruption_and_a_resumption() -> None:
-    gateway = ScriptedGateway(["डीएपी उपलब्ध है। ", "बोरी पचास किलो की है।"])
+    gateway = ScriptedGateway(["डीएपी स्टॉक में है। ", "बोरी पचास किलो की है।"])
     agent = make_agent(gateway, name=None)
     await collect(agent, "डीएपी है क्या")
 
-    agent.note_interruption("डीएपी उपलब्ध है")
+    agent.note_interruption("डीएपी स्टॉक में है")
     last = agent.memory.turns[-1]
     assert last.role == "assistant" and last.interrupted
     assert "बीच में टोका" in last.render()
-    assert last.text == "डीएपी उपलब्ध है"
+    assert last.text == "डीएपी स्टॉक में है"
 
     agent.note_resumed("बोरी पचास किलो की है।")
     assert not agent.memory.turns[-1].interrupted
-    assert agent.memory.turns[-1].text == "डीएपी उपलब्ध है बोरी पचास किलो की है।"
+    assert agent.memory.turns[-1].text == "डीएपी स्टॉक में है बोरी पचास किलो की है।"
 
 
 async def test_a_withdrawn_speculation_leaves_no_orphan_question() -> None:

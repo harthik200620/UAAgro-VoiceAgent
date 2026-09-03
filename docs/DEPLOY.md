@@ -140,3 +140,21 @@ per host and mounted or copied into the worker's working directory:
 Without the Silero file the gate falls back to its spectral rule and says so
 at startup (`vad.judge` is absent). With it, `vad.judge judge=silero` appears
 once when the first call is built.
+
+## Storage, the demo line and the background worker (added 3 September 2026)
+
+| Variable | Development | Production |
+|---|---|---|
+| `STORAGE_BACKEND` | `local` — recordings and uploads under `STORAGE_LOCAL_DIR` (default `.localdev/objects`) | `s3` (required; the process refuses to start on `local`) |
+| `TELEPHONY_PROVIDER` | `simulator` — the panel's *Call now* is answered from the browser test page, nothing is dialled | `exotel` (or `twilio`, `plivo`) |
+| `OUTBOUND_QUICK_DIAL_SELF_APPROVE` | `true` — a quick dial is approved by the person who placed it | must be `false`; the four-eyes rule holds |
+
+The background worker (`arq worker.tasks.WorkerSettings`, the `worker`
+service in the compose file) is not optional: it indexes knowledge documents,
+writes the post-call summary, runs the dialer and the scheduled MySQL syncs,
+and refreshes the heartbeat the panel's Knowledge page shows. Without it,
+uploads stay *pending* and the Overview's attention list says so.
+
+Recordings are written by the voice worker at the end of each call (both
+legs, WAV) and streamed by the API from the configured store; in the bucket
+they carry `delete-after` metadata for the lifecycle rule in `docs/RUNBOOK.md`.

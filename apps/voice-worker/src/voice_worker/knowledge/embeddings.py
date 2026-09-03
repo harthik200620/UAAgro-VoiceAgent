@@ -46,6 +46,7 @@ DIMENSIONS = 768
 #: why chunking targets 500 tokens -- comfortably inside it.
 MAX_SEQUENCE = 512
 
+
 def default_model_dir() -> Path:
     """Where the model lives, honouring ``E5_MODEL_DIR``.
 
@@ -57,11 +58,12 @@ def default_model_dir() -> Path:
 
     return get_settings().e5_model_dir
 
+
 #: The upstream repository publishes an ONNX export alongside the weights, so
 #: there is no conversion step and no torch in the download path.
 DOWNLOAD_HINT = (
     "Fetch the ONNX export and tokeniser (about 1.1 GB) with:\n"
-    "  uv run python -c \"from huggingface_hub import hf_hub_download as d; "
+    '  uv run python -c "from huggingface_hub import hf_hub_download as d; '
     "import shutil, pathlib; "
     "p=pathlib.Path('models/multilingual-e5-base'); p.mkdir(parents=True, exist_ok=True); "
     "[shutil.copy(d('intfloat/multilingual-e5-base', r), p/l) "

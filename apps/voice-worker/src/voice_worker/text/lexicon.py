@@ -119,6 +119,14 @@ def similarity(left: str, right: str) -> float:
 
 
 @dataclass(frozen=True, slots=True)
+class Place:
+    """A district the helpline serves, in both scripts, for STT and matching."""
+
+    name_en: str
+    name_hi: str
+
+
+@dataclass(frozen=True, slots=True)
 class LexiconEntry:
     """One catalogue item and every spoken form that should reach it."""
 
@@ -126,6 +134,11 @@ class LexiconEntry:
     name_hi: str
     name_en: str
     variants: tuple[str, ...]
+    #: The kind of product (``categories.slug``) and the crops it is for.
+    #: Read by the direct-answer layer to narrow "आलू का बीज" to a product
+    #: without a crop name having to *be* a product name.
+    category: str = ""
+    crops: tuple[str, ...] = ()
 
     def normalised_variants(self) -> tuple[str, ...]:
         forms = {normalise(self.name_hi), normalise(self.name_en)}
@@ -157,12 +170,14 @@ class Lexicon:
     """
 
     entries: list[LexiconEntry] = field(default_factory=list)
+    #: The districts, for keyterms and for "बाराबंकी वाला सेंटर कहाँ है".
+    places: tuple[Place, ...] = ()
     _exact: dict[str, str] = field(default_factory=dict, repr=False)
     _by_length: dict[int, list[tuple[str, str]]] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_entries(cls, entries: list[LexiconEntry]) -> Lexicon:
-        lexicon = cls(entries=entries)
+    def from_entries(cls, entries: list[LexiconEntry], places: tuple[Place, ...] = ()) -> Lexicon:
+        lexicon = cls(entries=entries, places=places)
         lexicon._build()
         return lexicon
 
@@ -206,6 +221,9 @@ class Lexicon:
             terms.add(entry.name_hi)
             terms.add(entry.name_en)
             terms.update(entry.variants)
+        for place in self.places:
+            terms.add(place.name_en)
+            terms.add(place.name_hi)
         return sorted(t for t in terms if t)
 
     # -- matching --------------------------------------------------------- #

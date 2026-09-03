@@ -116,10 +116,7 @@ def log_mel_spectrogram(samples: np.ndarray) -> np.ndarray:
     padded = np.pad(audio, (N_FFT // 2, N_FFT // 2), mode="reflect")
 
     frame_count = 1 + (padded.size - N_FFT) // HOP_LENGTH
-    indices = (
-        np.arange(N_FFT)[np.newaxis, :]
-        + HOP_LENGTH * np.arange(frame_count)[:, np.newaxis]
-    )
+    indices = np.arange(N_FFT)[np.newaxis, :] + HOP_LENGTH * np.arange(frame_count)[:, np.newaxis]
     frames = padded[indices] * _WINDOW
 
     spectrum = np.fft.rfft(frames, n=N_FFT, axis=1)

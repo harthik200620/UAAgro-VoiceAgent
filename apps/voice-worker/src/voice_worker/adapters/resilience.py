@@ -96,8 +96,7 @@ class CircuitOpen(VendorUnavailableError):
             vendor=vendor,
             service=service,
             detail=(
-                f"circuit open after repeated failures; not retried for "
-                f"another {retry_in_s:.0f}s"
+                f"circuit open after repeated failures; not retried for another {retry_in_s:.0f}s"
             ),
         )
         self.retry_in_s = retry_in_s

@@ -1,45 +1,37 @@
-"""Call recording capture and upload (§11.5, §17, §18).
+"""Call recording capture (§11.5, §17, §18).
 
 A recording is the most sensitive artefact this system produces. It is a
 farmer's voice, their name, their village, what they grow and what they owe --
 and unlike the database, it cannot be selectively redacted after the fact. So
-three things are true of every recording here, and each is enforced rather than
+two things are true of every recording, and each is enforced rather than
 documented:
 
-**It is encrypted at rest with a customer-managed key.** §17 requires SSE-KMS,
-not SSE-S3: the difference is who can decrypt it. With SSE-S3 anyone with
-``s3:GetObject`` can read the audio; with SSE-KMS they also need a grant on the
-key, which is auditable and revocable independently of bucket policy.
+**Its location is never logged.** §23-6 puts a recording URL in the same
+category as a phone number, and for the same reason: a presigned URL in a log
+aggregator is a copy of the recording in a log aggregator. Every log line
+carries the object *key* and never a URL, and the store (``uaagro_db.storage``)
+produces no URLs at all -- the control plane streams bytes through its own
+authenticated route.
 
-**Its URL is never logged.** §23-6 puts a recording URL in the same category as
-a phone number, and for the same reason: a presigned URL in a log aggregator is
-a copy of the recording in a log aggregator. Every log line here carries the
-object *key* and never the URL.
+**It is written once the line has closed.** Capture happens on the audio path
+-- a few bytes appended per frame -- and the write happens in the session's
+close path, after the last frame, so a slow bucket can never become a dropped
+call. The key is derived from the call reference, so a retry overwrites rather
+than accumulates.
 
-**It expires.** §18 sets a retention window and the object carries the deletion
-date as metadata, so a lifecycle rule can enforce it and an auditor can see the
-intent on the object itself rather than having to trust a bucket policy they
-cannot see from here.
-
-Capture is separate from upload on purpose. §11.5 puts the upload in the
-post-call pipeline with a ≤30 s budget and idempotent retries; doing it inline
-would put an S3 round trip on the audio path, and a slow bucket would become a
-dropped call.
+Retention (§18) is a lifecycle rule on the bucket keyed by the date prefix in
+:func:`object_key`; the intent travels on the object as metadata so an auditor
+can see it without reading a bucket policy.
 """
 
 from __future__ import annotations
 
 import io
-import struct
 import wave
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
-from typing import Any
+from datetime import UTC, datetime
 
 import structlog
-
-from uaagro_domain.errors import VendorError
-from uaagro_domain.settings import Settings, get_defaults
 
 log = structlog.get_logger(__name__)
 
@@ -140,116 +132,18 @@ def object_key(*, call_ref: str, started_at: datetime) -> str:
     the object (§23-6).
     """
     day = started_at.astimezone(UTC)
-    return f"recordings/{day:%Y/%m/%d}/{call_ref}.wav"
-
-
-@dataclass
-class RecordingStore:
-    """Uploads recordings to S3-compatible storage with SSE-KMS (§17)."""
-
-    settings: Settings
-    _client: Any = field(default=None, repr=False)
-
-    def _ensure_client(self) -> Any:
-        if self._client is None:
-            import boto3
-
-            self._client = boto3.client(
-                "s3",
-                endpoint_url=self.settings.s3_endpoint,
-                region_name=self.settings.s3_region,
-                aws_access_key_id=self.settings.require(
-                    "s3_access_key_id", needed_for="recording upload (§11.5)"
-                ),
-                aws_secret_access_key=self.settings.require(
-                    "s3_secret_access_key", needed_for="recording upload (§11.5)"
-                ),
-                config=_path_style(self.settings),
-            )
-        return self._client
-
-    async def upload(
-        self, *, call_ref: str, started_at: datetime, wav: bytes
-    ) -> str:
-        """Store one recording. Returns the object key, never a URL.
-
-        Idempotent by construction: the key is derived from the call reference,
-        so §11.5's retries overwrite rather than accumulate. A post-call
-        pipeline that retried into a new key each time would multiply storage
-        and leave an auditor unable to say which copy was the real one.
-        """
-        import asyncio
-
-        key = object_key(call_ref=call_ref, started_at=started_at)
-        # §18's window, from config rather than a constant here: retention is a
-        # compliance decision an operator changes, not a property of the
-        # uploader.
-        retention = get_defaults().compliance.retention_days_recordings
-        expires = datetime.now(UTC) + timedelta(days=retention)
-
-        params: dict[str, Any] = {
-            "Bucket": self.settings.s3_bucket,
-            "Key": key,
-            "Body": wav,
-            "ContentType": "audio/wav",
-            # §17: customer-managed key, not SSE-S3. The difference is whether
-            # s3:GetObject alone is enough to hear a farmer's voice.
-            "ServerSideEncryption": "aws:kms",
-            "Metadata": {
-                "call-ref": call_ref,
-                # §18: the retention intent travels on the object, so an
-                # auditor sees it without needing to read a bucket policy.
-                "delete-after": expires.date().isoformat(),
-            },
-        }
-        if self.settings.kms_key_id:
-            params["SSEKMSKeyId"] = self.settings.kms_key_id
-
-        client = self._ensure_client()
-        try:
-            await asyncio.to_thread(client.put_object, **params)
-        except Exception as exc:
-            # §11.5: a failure here never loses the call record, which was
-            # written incrementally during the call. The recording is retried
-            # by the post-call pipeline with backoff.
-            log.error(
-                "recording.upload_failed",
-                key=key,
-                error=type(exc).__name__,
-            )
-            raise VendorError(
-                "The recording could not be uploaded.",
-                remedy="The post-call pipeline retries with backoff. Check the "
-                "bucket policy and the KMS grant if it keeps failing.",
-                context={"key": key},
-            ) from exc
-
-        # The key, never a URL. §23-6 treats a recording URL like a phone
-        # number, and a presigned URL in a log aggregator is a copy of the
-        # recording in a log aggregator.
-        log.info("recording.uploaded", key=key, bytes=len(wav))
-        return key
-
-
-def _path_style(settings: Settings) -> Any:
-    """MinIO needs path-style addressing; real S3 does not care."""
-    from botocore.config import Config
-
-    return Config(
-        s3={"addressing_style": "path" if settings.s3_force_path_style else "virtual"},
-        retries={"max_attempts": 3, "mode": "standard"},
-    )
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in call_ref)[:80]
+    return f"recordings/{day:%Y/%m/%d}/{safe or 'call'}.wav"
 
 
 def pcm_duration_s(pcm: bytes) -> float:
     """Seconds of 8 kHz 16-bit mono audio in ``pcm``."""
-    return len(pcm) / (SAMPLE_RATE * SAMPLE_WIDTH)
+    return (len(pcm) // SAMPLE_WIDTH) / SAMPLE_RATE
 
 
 def silence(seconds: float) -> bytes:
-    """Digital silence, for padding a leg that started late."""
-    frames = int(seconds * SAMPLE_RATE)
-    return struct.pack(f"<{frames}h", *([0] * frames))
+    """``seconds`` of digital silence at the call's sample rate."""
+    return b"\x00" * (int(seconds * SAMPLE_RATE) * SAMPLE_WIDTH)
 
 
 __all__ = (
@@ -258,7 +152,6 @@ __all__ = (
     "SAMPLE_RATE",
     "SAMPLE_WIDTH",
     "RecordingBuffer",
-    "RecordingStore",
     "object_key",
     "pcm_duration_s",
     "silence",

@@ -106,22 +106,35 @@ class Template:
 REGISTRY: dict[str, Template] = {
     t.name: t
     for t in (
-        Template("offer_details", TemplateCategory.MARKETING,
-                 parameters=("name", "offer", "saving", "valid_until", "centre")),
-        Template("product_price_list", TemplateCategory.UTILITY,
-                 parameters=("name", "products")),
+        Template(
+            "offer_details",
+            TemplateCategory.MARKETING,
+            parameters=("name", "offer", "saving", "valid_until", "centre"),
+        ),
+        Template("product_price_list", TemplateCategory.UTILITY, parameters=("name", "products")),
         # Utility, not marketing. The farmer asked, it is service, and the
         # 7.5x difference is the single largest avoidable cost in §8.
-        Template("dosage_instructions", TemplateCategory.UTILITY,
-                 parameters=("crop", "product", "dose", "phi_days", "precaution")),
-        Template("centre_location", TemplateCategory.UTILITY,
-                 parameters=("centre", "address", "timings", "phone")),
-        Template("callback_confirmation", TemplateCategory.UTILITY,
-                 parameters=("name", "ticket_ref", "window")),
-        Template("order_status_update", TemplateCategory.UTILITY,
-                 parameters=("order_ref", "status", "eta")),
-        Template("ticket_ack", TemplateCategory.UTILITY,
-                 parameters=("ticket_ref", "subject")),
+        Template(
+            "dosage_instructions",
+            TemplateCategory.UTILITY,
+            parameters=("crop", "product", "dose", "phi_days", "precaution"),
+        ),
+        Template(
+            "centre_location",
+            TemplateCategory.UTILITY,
+            parameters=("centre", "address", "timings", "phone"),
+        ),
+        Template(
+            "callback_confirmation",
+            TemplateCategory.UTILITY,
+            parameters=("name", "ticket_ref", "window"),
+        ),
+        Template(
+            "order_status_update",
+            TemplateCategory.UTILITY,
+            parameters=("order_ref", "status", "eta"),
+        ),
+        Template("ticket_ack", TemplateCategory.UTILITY, parameters=("ticket_ref", "subject")),
     )
 }
 
@@ -179,9 +192,7 @@ class MessagingAdapter(ABC):
         """Free-form reply inside an open 24-hour window."""
 
 
-def validate_parameters(
-    template: Template, parameters: Mapping[str, str]
-) -> list[str]:
+def validate_parameters(template: Template, parameters: Mapping[str, str]) -> list[str]:
     """Missing or unknown placeholders.
 
     Checked before dispatch. Meta rejects a mismatched template at the API, so
@@ -209,9 +220,7 @@ class CloudApiAdapter(MessagingAdapter):
         if self._client is None:
             import httpx
 
-            token = self.settings.require(
-                "wa_access_token", needed_for="WhatsApp dispatch (§14)"
-            )
+            token = self.settings.require("wa_access_token", needed_for="WhatsApp dispatch (§14)")
             self._client = httpx.AsyncClient(
                 base_url="https://graph.facebook.com/v21.0",
                 headers={"Authorization": f"Bearer {token}"},
@@ -244,9 +253,7 @@ class CloudApiAdapter(MessagingAdapter):
                 context={"template": template.name},
             )
 
-        phone_id = self.settings.require(
-            "wa_phone_number_id", needed_for="WhatsApp dispatch (§14)"
-        )
+        phone_id = self.settings.require("wa_phone_number_id", needed_for="WhatsApp dispatch (§14)")
         body = {
             "messaging_product": "whatsapp",
             "to": to,
@@ -269,8 +276,7 @@ class CloudApiAdapter(MessagingAdapter):
         response = await client.post(f"/{phone_id}/messages", json=body)
         if response.status_code >= 400:
             # The body is not logged: Meta echoes the destination number.
-            log.error("whatsapp.send_failed", status=response.status_code,
-                      template=template.name)
+            log.error("whatsapp.send_failed", status=response.status_code, template=template.name)
             raise VendorError(
                 f"WhatsApp returned {response.status_code}.",
                 remedy="§13.2: the agent reads the offer aloud and raises a "
@@ -289,9 +295,7 @@ class CloudApiAdapter(MessagingAdapter):
         return message_id
 
     async def send_service_reply(self, *, to: str, text: str) -> str:
-        phone_id = self.settings.require(
-            "wa_phone_number_id", needed_for="WhatsApp dispatch (§14)"
-        )
+        phone_id = self.settings.require("wa_phone_number_id", needed_for="WhatsApp dispatch (§14)")
         client = self._ensure_client()
         response = await client.post(
             f"/{phone_id}/messages",
@@ -365,9 +369,7 @@ def parse_webhook(payload: Mapping[str, Any]) -> list[InboundMessage]:
                 if not isinstance(body, str):
                     continue
                 try:
-                    received = datetime.fromtimestamp(
-                        int(message.get("timestamp", 0)), tz=UTC
-                    )
+                    received = datetime.fromtimestamp(int(message.get("timestamp", 0)), tz=UTC)
                 except (TypeError, ValueError):
                     received = datetime.now(UTC)
                 messages.append(

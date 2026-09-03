@@ -48,11 +48,13 @@ TELEPHONY_SAMPLE_RATE = 8_000
 #: signal about whether *this* utterance has ended.
 MAX_WINDOW_S = 8.0
 
+
 def default_model_path() -> Path:
     """Where the weights live, honouring ``SMART_TURN_MODEL_PATH``."""
     from uaagro_domain.settings import get_settings
 
     return get_settings().smart_turn_model_path
+
 
 #: Probability above which the turn is judged complete. Deliberately above the
 #: midpoint: §19.2 weights a false cut above dead air, so the model has to be

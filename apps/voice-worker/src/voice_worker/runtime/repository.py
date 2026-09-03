@@ -42,6 +42,8 @@ log = structlog.get_logger(__name__)
 class SqlCallRepository:
     """Persists calls, turns, events, DTMF and the campaign link."""
 
+    persists = True
+
     async def create_call(self, record: CallRecord) -> None:
         """Write the ``calls`` row at INIT.
 
@@ -250,6 +252,22 @@ class SqlCallRepository:
                 )
             )
 
+    async def set_recording(
+        self,
+        call_id: uuid.UUID,
+        started_at: datetime,
+        *,
+        object_key: str,
+        duration_seconds: int,
+    ) -> None:
+        """Where the audio went. The key, never a URL (§23-6)."""
+        async with incall_session() as session:
+            await session.execute(
+                update(Call)
+                .where(Call.id == call_id, Call.started_at == started_at)
+                .values(recording_object_key=object_key, recording_duration=duration_seconds)
+            )
+
 
 class NullCallRepository:
     """No-op repository for transport tests and the standalone simulator.
@@ -257,6 +275,8 @@ class NullCallRepository:
     Every method exists so the session never has to ask whether persistence
     is on; it simply calls, and nothing happens.
     """
+
+    persists = False
 
     async def create_call(self, record: CallRecord) -> None:
         return None
@@ -340,6 +360,16 @@ class NullCallRepository:
         error_code: str | None,
         error_detail: str | None,
         latency_stats: dict[str, Any] | None = None,
+    ) -> None:
+        return None
+
+    async def set_recording(
+        self,
+        call_id: uuid.UUID,
+        started_at: datetime,
+        *,
+        object_key: str,
+        duration_seconds: int,
     ) -> None:
         return None
 

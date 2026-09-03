@@ -83,10 +83,8 @@ class AnthropicTransport(LlmTransport):
     base_url: str | None = None
     _client: Any = field(default=None, repr=False)
 
-
     def _ensure_client(self) -> Any:
         if self._client is None:
-
             key = self.settings.anthropic_api_key
             if not key:
                 # §0 rule 4: name the variable rather than failing obscurely on

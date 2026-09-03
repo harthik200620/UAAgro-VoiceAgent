@@ -199,9 +199,7 @@ async def ingest_markdown(
             for start in range(0, len(to_embed), EMBED_BATCH):
                 batch = to_embed[start : start + EMBED_BATCH]
                 # Heading plus body -- see `Chunk.embedding_text`.
-                vectors = await embedder.embed_passages(
-                    [c.embedding_text for _, c in batch]
-                )
+                vectors = await embedder.embed_passages([c.embedding_text for _, c in batch])
                 for (position, _), vector in zip(batch, vectors, strict=True):
                     rows[position].embedding = vector
                 report.chunks_embedded += len(batch)

@@ -25,8 +25,8 @@ tool results they ground against are complete before generation starts.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
-from typing import Any
+from collections.abc import AsyncIterator, Mapping, Sequence
+from typing import Any, ClassVar
 
 import pytest
 
@@ -34,7 +34,7 @@ from uaagro_domain.enums import Intent
 from voice_worker.flow.agent import Agent
 from voice_worker.flow.context import ContextBuilder
 from voice_worker.flow.validator import FALLBACK_SCRIPT_HI, OutputValidator
-from voice_worker.tools.base import ToolRegistry
+from voice_worker.tools.base import Tool, ToolContext, ToolRegistry
 
 
 class ScriptedGateway:
@@ -94,19 +94,32 @@ async def test_each_sentence_is_released_as_it_completes() -> None:
     assert "".join(pieces).replace("  ", " ").strip().endswith("कुछ और चाहिए?")
 
 
+class ApprovedAdvice(Tool):
+    """A recommendation the agronomist approved, as the tool would return it."""
+
+    name = "recommend_for_crop"
+    description = "approved advice for the test"
+    parameters: ClassVar[dict[str, Any]] = {"type": "object", "properties": {}}
+
+    async def run(self, args: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
+        return {"crop": "गेहूँ", "recommendations": [{"product": "यूरिया", "dose": "200 g"}]}
+
+
 async def test_a_dosage_answer_is_not_split(monkeypatch) -> None:
     """§16.2: the dose, the pre-harvest interval and the precaution are one
     unit. Speaking the dose and stopping is the outcome worse than being slow.
     """
-    gateway = ScriptedGateway(
-        ["एक एकड़ में ", "दो सौ ग्राम डालें। ", "कटाई से पहले ", "इक्कीस दिन रुकें।"]
-    )
+    gateway = ScriptedGateway(["एक एकड़ में ", "दो सौ ग्राम डालें। ", "कटाई से पहले ", "इक्कीस दिन रुकें।"])
     agent = make_agent(gateway)
 
     async def dosage(_self: Agent, _t: str) -> Intent:
         return Intent.DOSAGE_QUERY
 
     monkeypatch.setattr(Agent, "_classify", dosage)
+    # §16.2: advice is generated only on an approved recommendation, so
+    # the registry supplies one and the focus knows the crop.
+    agent.registry.register(ApprovedAdvice())
+    agent.focus.crop = "wheat"
 
     pieces = await collect(agent, "कितना डालें")
 
@@ -145,9 +158,7 @@ async def test_a_failure_after_speaking_stops_rather_than_contradicting() -> Non
     violation. The first was clean and has been spoken, so the turn stops
     there and hands over instead of retracting.
     """
-    gateway = ScriptedGateway(
-        ["जी हाँ, डीएपी उपलब्ध है। ", "कीमत 1350 रुपये है।"]
-    )
+    gateway = ScriptedGateway(["जी हाँ, डीएपी उपलब्ध है। ", "कीमत 1350 रुपये है।"])
     agent = make_agent(gateway)
 
     pieces = await collect(agent, "डीएपी है क्या")
@@ -236,7 +247,8 @@ async def test_handle_still_returns_a_whole_turn() -> None:
 
     result = await agent.handle("डीएपी है क्या")
 
-    assert result.text.strip() == "जी हाँ, उपलब्ध है।"
+    # "उपलब्ध" is swapped for the spoken "स्टॉक में" on the way out (text/register.py).
+    assert result.text.strip() == "जी हाँ, स्टॉक में है।"
     assert result.validation.ok
 
 

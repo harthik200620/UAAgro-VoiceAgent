@@ -52,10 +52,7 @@ MAX_REGENERATIONS = 1
 #: The cached phrase spoken when generation cannot be made safe. Not composed by
 #: a model, for the same reason the safety script is not.
 FALLBACK_PHRASE_KEY = "fallback.cannot_answer.hi"
-FALLBACK_SCRIPT_HI = (
-    "जी, यह जानकारी मेरे पास पक्की नहीं है। "
-    "मैं आपको हमारे केंद्र प्रबंधक से जोड़ देता हूँ।"
-)
+FALLBACK_SCRIPT_HI = "जी, इसकी पक्की जानकारी मेरे पास नहीं है। मैं आपको सेंटर मैनेजर से जोड़ देता हूँ।"
 
 #: §11.3: always आप, never तुम. The informal second person from a stranger in a
 #: service call is not casual, it is rude, and in central UP it lands as
@@ -94,6 +91,25 @@ _AI_FILLER = re.compile(
 # confusable with a Latin o, which is true and is exactly why the range has to
 # be written out rather than left to \d.
 _NUMBER = re.compile(r"[0-9०-९][0-9०-९,.]*")  # noqa: RUF001
+#: "Put X on it": the verbs of an application instruction.
+_APPLY = re.compile(
+    r"(डाल(ें|िए|ना|ो|कर| दीजिए| दें)|स्प्रे (करें|कीजिए|करना|कर दें)|छिड़क(ें|ाव|िए)|"
+    r"घोल(कर| बना)|मिलाकर (डाल|छिड़क)|ड्रेंचिंग|drench|spray (it|with)|apply)"
+)
+#: Tools whose result is an approved recommendation (§16.2).
+_RECOMMENDATION_TOOLS = frozenset({"recommend_for_crop", "calculate_dose"})
+
+
+def has_recommendation(tool_results: Sequence[Mapping[str, Any]]) -> bool:
+    """Whether this turn holds an approved recommendation to ground advice in."""
+    for result in tool_results:
+        if result.get("tool") not in _RECOMMENDATION_TOOLS or not result.get("ok"):
+            continue
+        data = result.get("data") or {}
+        if isinstance(data, Mapping) and (data.get("recommendations") or data.get("dose")):
+            return True
+    return False
+
 
 _DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
 
@@ -173,9 +189,7 @@ class OutputValidator:
         stripped = text.strip()
 
         if not stripped:
-            return ValidationOutcome(
-                ok=False, violations=(Violation("empty", "no text to speak"),)
-            )
+            return ValidationOutcome(ok=False, violations=(Violation("empty", "no text to speak"),))
 
         if _TUM.search(stripped):
             violations.append(Violation("register", "uses तुम; §11.3 requires आप"))
@@ -196,6 +210,15 @@ class OutputValidator:
         if _AI_FILLER.search(stripped):
             violations.append(Violation("filler", "contains English AI filler (§16.3)"))
 
+        if _APPLY.search(stripped) and not has_recommendation(tool_results):
+            # §16.2: an instruction to put something on a crop comes only from
+            # an approved recommendation. The model, handed a chunk that merely
+            # mentions the crop, named a fungicide from memory on the first
+            # live test; the persona forbids it and this refuses it.
+            violations.append(
+                Violation("advice", "instructs an application with no approved recommendation")
+            )
+
         ungrounded = self._ungrounded_numbers(stripped, tool_results)
         if ungrounded:
             violations.append(
@@ -211,9 +234,7 @@ class OutputValidator:
             log.info("validator.rejected", rules=[v.rule for v in violations])
         return ValidationOutcome(ok=not violations, violations=tuple(violations))
 
-    def _ungrounded_numbers(
-        self, text: str, tool_results: Sequence[Mapping[str, Any]]
-    ) -> set[str]:
+    def _ungrounded_numbers(self, text: str, tool_results: Sequence[Mapping[str, Any]]) -> set[str]:
         """Numbers in the output that no tool result this turn supports.
 
         The core §1 N1 check. It cannot tell whether a sentence is true, but it
@@ -294,9 +315,7 @@ class ValidatedGeneration:
 
         for attempt in range(self.max_regenerations + 1):
             text = await generate(feedback)
-            outcome = self.validator.validate(
-                text, tool_results=tool_results, is_dosage=is_dosage
-            )
+            outcome = self.validator.validate(text, tool_results=tool_results, is_dosage=is_dosage)
             if outcome.ok:
                 return text, outcome, False
             feedback = "; ".join(str(v) for v in outcome.violations)

@@ -391,8 +391,10 @@ class ConversationPipeline:
         if not self._agent_speaking:
             return
         gate = self.voice_gate
-        if gate is not None and gate.frames > 0 and not gate.heard_voice_within(
-            VOICE_CORROBORATION_S
+        if (
+            gate is not None
+            and gate.frames > 0
+            and not gate.heard_voice_within(VOICE_CORROBORATION_S)
         ):
             # Words with no voice behind them: the agent's own echo, or the
             # room. If the caller really is speaking, the gate will say so
@@ -569,9 +571,7 @@ class ConversationPipeline:
         except Exception as exc:  # pragma: no cover - a hook must never end a call
             log.warning("pipeline.discard_hook_failed", error=type(exc).__name__)
 
-    async def _take_speculation(
-        self, transcript: str, metrics: TurnMetrics
-    ) -> _Speculation | None:
+    async def _take_speculation(self, transcript: str, metrics: TurnMetrics) -> _Speculation | None:
         """Use the speculative answer if it was for this exact transcript."""
         speculation = self._speculation
         self._speculation = None
@@ -750,6 +750,12 @@ class ConversationPipeline:
         outcome = TurnOutcome(turn_index=self._turn_index, response=text)
         self.turns.append(outcome)
         self._turn_index += 1
+        # The ladder is the caller's silence clock, and it speaks too. Two
+        # speakers on one paced sender collided -- the ladder's prompt ended
+        # and reset the pacing slot under this line mid-play. The ladder's own
+        # prompts come through here as well; those must not cancel the ladder.
+        if self._silence_task is not asyncio.current_task():
+            self._cancel_silence_watch()
         await self._speak(text, metrics, outcome)
         self._finish_turn(metrics, outcome)
 
@@ -851,6 +857,10 @@ class ConversationPipeline:
                 if wait > 0:
                     await asyncio.sleep(wait)
                 elapsed = at
+                if self._agent_speaking:
+                    # Somebody is talking after all (a hand-over line, a
+                    # resumed answer). The clock restarts when they finish.
+                    return
                 self._silence_stage += 1
                 if phrase is not None:
                     log.info("pipeline.silence_prompt", stage=self._silence_stage, after_s=at)

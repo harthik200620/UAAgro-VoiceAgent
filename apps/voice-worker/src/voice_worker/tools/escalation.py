@@ -122,9 +122,7 @@ class QueueingWhatsAppPort(WhatsAppPort):
         self, *, to_phone_hash: bytes, template: str, params: Mapping[str, str], language: str
     ) -> str:
         message_id = f"queued-{uuid.uuid4().hex[:12]}"
-        self.queued.append(
-            {"template": template, "language": language, "params": dict(params)}
-        )
+        self.queued.append({"template": template, "language": language, "params": dict(params)})
         log.info("whatsapp.queued", template=template, language=language)
         return message_id
 
@@ -179,9 +177,7 @@ class TransferToHuman(Tool):
 
     async def run(self, args: Mapping[str, Any], context: ToolContext) -> dict[str, Any]:
         reason = TransferReason(str(args["reason"]))
-        urgency = TransferUrgency(
-            str(args.get("urgency") or _default_urgency(reason).value)
-        )
+        urgency = TransferUrgency(str(args.get("urgency") or _default_urgency(reason).value))
         override = reason in ALWAYS_TRANSFER or urgency is TransferUrgency.CRITICAL
 
         async with tool_session() as session:
@@ -373,9 +369,7 @@ async def _chain(session: AsyncSession, centre: Centre) -> list[TransferTarget]:
         )
     ).first()
     if regional is not None and regional.transfer_number:
-        chain.append(
-            TransferTarget("district_desk", regional.name, regional.transfer_number, 3)
-        )
+        chain.append(TransferTarget("district_desk", regional.name, regional.transfer_number, 3))
 
     helpline = await _helpline_number(session, centre)
     if helpline is not None:

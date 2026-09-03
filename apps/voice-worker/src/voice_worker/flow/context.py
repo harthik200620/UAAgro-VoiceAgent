@@ -236,8 +236,7 @@ class ConversationMemory:
         """§6.2: refresh every six turns, and only once there is something to
         summarise beyond what is already going in verbatim."""
         return (
-            len(self.turns) > VERBATIM_TURNS
-            and self._turns_since_summary >= SUMMARY_REFRESH_EVERY
+            len(self.turns) > VERBATIM_TURNS and self._turns_since_summary >= SUMMARY_REFRESH_EVERY
         )
 
     def older_turns(self) -> list[Turn]:
@@ -350,9 +349,7 @@ class ContextBuilder:
             # Logged, not silently truncated. §6.2's budget is a design target,
             # and quietly dropping history to meet it would make the agent
             # forget mid-call for reasons nobody could see.
-            log.warning(
-                "context.over_budget", tokens=tokens, budget=self.max_tokens
-            )
+            log.warning("context.over_budget", tokens=tokens, budget=self.max_tokens)
 
         return BuiltContext(
             system_blocks=tuple(blocks),

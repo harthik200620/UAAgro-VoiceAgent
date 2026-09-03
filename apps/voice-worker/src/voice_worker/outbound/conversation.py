@@ -122,10 +122,7 @@ TRANSITIONS: dict[OutboundState, frozenset[OutboundState]] = {
 # --------------------------------------------------------------------------- #
 
 _AFFIRMATIVE = re.compile(
-    whole_word(
-        "हाँ|हां|हा|जी हाँ|जी हां|जी|बिल्कुल|ठीक है|ठीक|चाहिए|"
-        "yes|ok|okay|sure|haan|ha ji"
-    ),
+    whole_word("हाँ|हां|हा|जी हाँ|जी हां|जी|बिल्कुल|ठीक है|ठीक|चाहिए|yes|ok|okay|sure|haan|ha ji"),
     re.IGNORECASE,
 )
 _NEGATIVE = re.compile(
@@ -244,9 +241,7 @@ class OutboundFlow:
     """One outbound call's position and counters."""
 
     state: OutboundState = OutboundState.CONNECT
-    history: list[OutboundState] = field(
-        default_factory=lambda: [OutboundState.CONNECT]
-    )
+    history: list[OutboundState] = field(default_factory=lambda: [OutboundState.CONNECT])
     objection_loops: int = 0
     confirmed: bool = False
     opted_out: bool = False
@@ -309,10 +304,7 @@ class OutboundAgent:
 
     def disclosure(self) -> str:
         """§13.2's mandatory opening. Spoken before anything else, every time."""
-        return (
-            "नमस्ते! मैं यूए एग्रो के नवीन खुशहाली किसान सेवा केंद्र से बोल रहा हूँ। "
-            "यह एक ऑटोमैटिक कॉल है।"
-        )
+        return "नमस्ते! मैं यूए एग्रो के नवीन खुशहाली किसान सेवा केंद्र से बोल रहा हूँ। यह एक ऑटोमैटिक कॉल है।"
 
     def verify_person(self) -> str:
         who = f"{self.farmer_name_hi} जी" if self.farmer_name_hi else "आप"
@@ -323,10 +315,7 @@ class OutboundAgent:
 
     def interest_check(self) -> str:
         """§13.2 offers both modalities in one sentence."""
-        return (
-            "अगर आप यह ऑफ़र लेना चाहते हैं, तो अपने फ़ोन पर एक दबाइए — "
-            "या बस 'हाँ' बोल दीजिए।"
-        )
+        return "अगर आप यह ऑफ़र लेना चाहते हैं, तो अपने फ़ोन पर एक दबाइए — या बस 'हाँ' बोल दीजिए।"
 
     async def handle_opt_out(self) -> str:
         """§13.2: immediate, unconditional, confirmed out loud.
@@ -342,10 +331,7 @@ class OutboundAgent:
         self.flow.opted_out = True
         self.flow.to(OutboundState.SUPPRESS)
         log.info("outbound.opted_out")
-        return (
-            "जी बिल्कुल, मैं आपका नंबर हटा देता हूँ। "
-            "असुविधा के लिए क्षमा कीजिए।"
-        )
+        return "जी बिल्कुल, मैं आपका नंबर हटा देता हूँ। असुविधा के लिए क्षमा कीजिए।"
 
     async def handle_confirmation(self) -> str:
         """§13.2's WHATSAPP step, including the failure branch.
@@ -374,10 +360,7 @@ class OutboundAgent:
         self.flow.spoke_offer_aloud = True
         if self.create_ticket is not None:
             await self.create_ticket("whatsapp_dispatch_failed")
-        return (
-            "व्हाट्सऐप पर भेजने में दिक़्क़त आ रही है, तो मैं आपको यहीं बता देता हूँ। "
-            + self.offer.render()
-        )
+        return "व्हाट्सऐप पर भेजने में दिक़्क़त आ रही है, तो मैं आपको यहीं बता देता हूँ। " + self.offer.render()
 
 
 __all__ = (

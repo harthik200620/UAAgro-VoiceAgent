@@ -26,9 +26,9 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from uaagro_db.models import Brand, Product
+from uaagro_db.models import Brand, Category, District, Product
 
-from .lexicon import Lexicon, LexiconEntry
+from .lexicon import Lexicon, LexiconEntry, Place
 
 log = structlog.get_logger(__name__)
 
@@ -42,15 +42,19 @@ async def load_lexicon(session: AsyncSession) -> Lexicon:
     """
     rows = (
         await session.execute(
-            select(Product, Brand.name, Brand.name_hi)
+            select(Product, Brand.name, Brand.name_hi, Category.slug)
             .outerjoin(Brand, Product.brand_id == Brand.id)
+            .outerjoin(Category, Product.category_id == Category.id)
             .where(Product.deleted_at.is_(None))
             .order_by(Product.sku)
         )
     ).all()
+    districts = (
+        await session.execute(select(District.name, District.name_hi).order_by(District.name))
+    ).all()
 
     entries: list[LexiconEntry] = []
-    for product, brand_en, brand_hi in rows:
+    for product, brand_en, brand_hi, category_slug in rows:
         variants: set[str] = set()
 
         # The brand alone, and the brand with the product. Both are said.
@@ -63,19 +67,23 @@ async def load_lexicon(session: AsyncSession) -> Lexicon:
         # name, and what appears on the label they are holding.
         variants.update(i for i in product.active_ingredients if i)
 
-        # Crops the product is for. "धान वाली दवा" reaches the right shelf.
-        variants.update(c for c in product.crop_targets if c)
-
+        # Crops are *not* spoken forms of a product. "potato" answers to a
+        # seed, a fungicide and a foliar spray at once, and as a variant it
+        # resolved to whichever came first by SKU. They travel on the entry
+        # instead, where the direct-answer layer narrows by kind and crop.
         entries.append(
             LexiconEntry(
                 sku=product.sku,
                 name_hi=product.name_hi,
                 name_en=product.name_en,
                 variants=tuple(sorted(variants)),
+                category=str(category_slug or ""),
+                crops=tuple(c for c in product.crop_targets if c),
             )
         )
 
-    lexicon = Lexicon.from_entries(entries)
+    places = tuple(Place(name_en=name, name_hi=name_hi or name) for name, name_hi in districts)
+    lexicon = Lexicon.from_entries(entries, places=places)
     log.info(
         "lexicon.loaded",
         products=len(entries),

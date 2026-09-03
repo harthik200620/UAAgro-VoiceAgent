@@ -137,3 +137,42 @@ is a question for each vendor's plan, and the answer goes into
 - Exotel's media IP ranges for `TELEPHONY_IP_ALLOWLIST`, from their console.
 - Whether the calling window (`CALLING_WINDOW_START`/`END`) matches the
   customer's licence conditions.
+
+## 7. The demo, end to end (added 3 September 2026)
+
+Everything here runs locally with the browser test page; nothing dials a
+phone. Start the four processes (API 8000, panel 3000, voice worker 8080,
+background jobs `uv run arq worker.tasks.WorkerSettings`) with
+`.localdev/env` sourced.
+
+1. **Price and stock, without the model.** Open `/dev/call`, start a call,
+   ask "डीएपी का रेट क्या है?". Expect the pack, the rupee figure and the
+   centre inside a second of going quiet, and "यह लखनऊ सेंटर का रेट है" once
+   (the caller has no centre of their own). Then "आलू का बीज है क्या?" and,
+   after the answer, just "स्टॉक है क्या?" — the second question is about the
+   potato seed. Then "आपका सेंटर कहाँ है?" — the address, the hours and the
+   phone number in words.
+2. **The call is on record.** Hang up. On the panel's Overview the call is
+   counted under *test calls*, not in the day's numbers. Open it from Calls:
+   every turn, the reply times, the tool each turn used, and a recording that
+   plays (both legs; the caller left, the agent right). A summary appears
+   within a minute if the background jobs are running.
+3. **The knowledge base speaks only what it knows.** On Knowledge, add a note
+   (for instance a paragraph on drip irrigation subsidy with a date). Wait
+   for *indexed* (the status strip shows the worker's heartbeat). On a new
+   call ask about it — expect the note's facts, in plain words. Ask about
+   something the note does not cover — expect "इसकी पक्की जानकारी अभी मेरे पास
+   नहीं है" and the offer of a person, never an invented figure.
+4. **Call now.** On Outbound, paste your own number, tick the consent
+   attestation, press *Call now*. The campaign starts; the contact card turns
+   to *ringing* with *Answer in browser*. Open it: the outbound script plays
+   (disclosure first), press 2 and ask a product question, press 1, hang up.
+   The card turns green with the outcome; the call is under Calls with its
+   transcript and recording.
+5. **The client's database.** On Data, add the MySQL source (host, port,
+   database, user, password), *Test connection*, map the stores, products and
+   stock tables to our fields, *Sync now*. The run lists what it wrote; the
+   centres, catalogue and stock pages show it; the agent quotes it on the next
+   call.
+6. **Changing the words.** On Flows → the inbound helpline, edit the prompt or
+   the greeting, save as a new version, publish. The next call speaks it.

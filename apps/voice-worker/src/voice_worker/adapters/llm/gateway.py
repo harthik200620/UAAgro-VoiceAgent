@@ -131,7 +131,6 @@ class HttpTransport(LlmTransport):
 
     def _ensure_client(self) -> Any:
         if self._client is None:
-
             key = self.settings.llm_gateway_master_key
             if not key:
                 # §0 rule 4: name the variable rather than failing obscurely at
@@ -262,9 +261,7 @@ class LlmGateway:
                     user_message=user_message,
                     cacheable_prefix=cacheable_prefix,
                     max_tokens=max_tokens if max_tokens is not None else self.max_tokens,
-                    temperature=(
-                        temperature if temperature is not None else self.temperature
-                    ),
+                    temperature=(temperature if temperature is not None else self.temperature),
                 ):
                     yield piece, rung
                 return

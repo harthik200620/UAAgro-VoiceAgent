@@ -61,6 +61,7 @@ MAX_RECOMMENDATIONS = 3
 #: Matches no crop. See ``Tool.warmup_args``.
 WARMUP_TERM = "zzzzwarmup"
 
+
 class RecommendForCrop(Tool):
     """What to apply, from agronomist-approved rows only."""
 

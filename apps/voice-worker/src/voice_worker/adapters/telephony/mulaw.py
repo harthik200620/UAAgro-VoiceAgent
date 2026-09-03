@@ -65,9 +65,7 @@ def _encode_sample(sample: int) -> int:
 #: Precomputed because encoding runs on every outbound 20 ms frame of every
 #: concurrent call. 65,536 entries is 64 KB and buys a table lookup instead of
 #: a segment search per sample.
-_ENCODE_TABLE = bytes(
-    _encode_sample(s if s < 32768 else s - 65536) for s in range(65536)
-)
+_ENCODE_TABLE = bytes(_encode_sample(s if s < 32768 else s - 65536) for s in range(65536))
 
 
 def _decode_sample(byte: int) -> int:

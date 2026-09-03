@@ -153,9 +153,7 @@ async def run_campaign(
             dlt_template_id=campaign.dlt_template_id,
         )
         contacts = await load_contacts(session, campaign)
-        concurrency = max(
-            1, min(max_concurrent, campaign.max_concurrent_calls or max_concurrent)
-        )
+        concurrency = max(1, min(max_concurrent, campaign.max_concurrent_calls or max_concurrent))
         await _mark(session, campaign_id, CampaignStatus.RUNNING)
         await session.commit()
     announce(CAMPAIGN_UPDATED, {"id": str(campaign_id), "status": CampaignStatus.RUNNING.value})
@@ -183,7 +181,9 @@ async def run_campaign(
             # missed call; the other order costs a duplicate.
             attempt = await _record_attempt(db, campaign_id, contact.farmer_id)
             await db.commit()
-        announce(CONTACT_UPDATED, attempt.card("in_call", None))
+        # Ringing, not in a call: the media path announces the call when the
+        # farmer picks up. The panel's card shows the difference.
+        announce(CONTACT_UPDATED, attempt.card("ringing", None))
         try:
             return await originate(number, caller_id, f"contact:{attempt.contact_id}")
         except Exception:
@@ -211,11 +211,7 @@ async def run_campaign(
     async with session_factory() as session:
         # Paused stays paused: a campaign stopped by the window or an operator
         # is resumable, and marking it complete would lose the rest of the list.
-        final = (
-            CampaignStatus.COMPLETED
-            if run.stopped_reason is None
-            else CampaignStatus.PAUSED
-        )
+        final = CampaignStatus.COMPLETED if run.stopped_reason is None else CampaignStatus.PAUSED
         await _mark(session, campaign_id, final)
         await session.commit()
     announce(CAMPAIGN_UPDATED, {"id": str(campaign_id), "status": final.value})
@@ -230,9 +226,7 @@ async def run_campaign(
 
 
 async def _mark(session: AsyncSession, campaign_id: uuid.UUID, status: CampaignStatus) -> None:
-    await session.execute(
-        update(Campaign).where(Campaign.id == campaign_id).values(status=status)
-    )
+    await session.execute(update(Campaign).where(Campaign.id == campaign_id).values(status=status))
 
 
 async def _reload_contact(
@@ -293,7 +287,9 @@ async def _plaintext_number(
         raise PermissionError(f"farmer {farmer_id} is not a contact of campaign {campaign_id}")
     farmer = _StoredNumber(phone_enc=row[0])
 
-    number = str(get_cipher().decrypt(farmer.phone_enc))
+    # `.e164`, never `str()`: the number type redacts itself when printed, on
+    # purpose, and the first simulated dial went out as ******2345.
+    number = get_cipher().decrypt(farmer.phone_enc).e164
     await append_audit(
         session,
         action=AuditAction.PHONE_DECRYPT,

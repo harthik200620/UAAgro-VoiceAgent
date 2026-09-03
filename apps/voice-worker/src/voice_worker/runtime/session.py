@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import structlog
 
 from uaagro_db.crypto import get_cipher
+from uaagro_db.storage import object_store
 from uaagro_domain import livefeed
 from uaagro_domain.enums import (
     CallDirection,
@@ -50,6 +51,7 @@ from ..adapters.telephony.base import (
 )
 from . import audio as audio_utils
 from .direction import OurNumbers, classify_direction
+from .recording import RecordingBuffer, object_key
 
 if TYPE_CHECKING:
     from ..pipelines.conversation import TurnOutcome
@@ -170,6 +172,18 @@ class CallRepository(Protocol):
         error_detail: str | None,
         latency_stats: dict[str, Any] | None = None,
     ) -> None: ...
+    async def set_recording(
+        self,
+        call_id: uuid.UUID,
+        started_at: datetime,
+        *,
+        object_key: str,
+        duration_seconds: int,
+    ) -> None: ...
+
+    #: Whether writes reach a database. A recording is stored only for a
+    #: call that has a row to hang it on.
+    persists: bool
 
 
 @dataclass(slots=True)
@@ -248,9 +262,18 @@ class CallSession:
         live_feed: LiveFeed | None = None,
         our_numbers: OurNumbers | None = None,
         transfer_adapter: Callable[[frozenset[str]], Any] | None = None,
+        provider: TelephonyProvider | None = None,
+        record_audio: bool = True,
     ) -> None:
         self._transport = transport
         self._serializer = serializer
+        # Which line this call came over, for the call record. Normally the
+        # serializer's provider; the browser test page announces itself as
+        # the simulator so its calls are counted apart from real traffic.
+        self._provider = provider or serializer.provider
+        # Both legs of the call, kept for the recording (§11.5). A few bytes
+        # appended per frame; written out after the line closes.
+        self._recording: RecordingBuffer | None = RecordingBuffer() if record_audio else None
         self._repository = repository
         self._direction = direction
         self._greeting_pcm = greeting_pcm
@@ -433,7 +456,7 @@ class CallSession:
         )
         log.info(
             "call.started",
-            provider=self._serializer.provider.value,
+            provider=self._provider.value,
             # Hashed and masked by the logging processor, never the raw number.
             from_number=metadata.from_number or "",
             to_number=metadata.to_number or "",
@@ -453,7 +476,7 @@ class CallSession:
                 started_at=self.started_at,
                 call_ref=metadata.call_sid,
                 direction=self._direction,
-                provider=self._serializer.provider,
+                provider=self._provider,
                 from_number_hash=self.from_number_hash,
                 to_number_hash=_hash_number(metadata.to_number),
                 organization_id=self._organization_id,
@@ -588,6 +611,10 @@ class CallSession:
                 },
             )
 
+        # The audio, now that no more of it is coming. Before the post-call
+        # job is queued, so the job finds the key on the row.
+        await self._store_recording()
+
         # §11.5: the post-call pipeline runs within 30 seconds of the call
         # ending. Enqueued last, after the call row is final, so the job does
         # not race the writer for the row it is about to enrich.
@@ -710,6 +737,8 @@ class CallSession:
         Never blocks on anything slow: §7.6 makes latency on this path a P1,
         and a media frame arrives every 20 ms whether or not we are ready.
         """
+        if self._recording is not None:
+            self._recording.add_caller(pcm)
         if self._pipeline is None:
             return
         await self._pipeline.feed_audio(pcm)
@@ -720,6 +749,8 @@ class CallSession:
             await self._transport.send_text(self._serializer.encode_audio(frame))
             self.stats.outbound_frames += 1
             self.stats.outbound_bytes += len(frame)
+            if self._recording is not None:
+                self._recording.add_agent(frame)
 
     async def clear_playback(self) -> None:
         """Drop audio the provider has buffered but not played (§5.4).
@@ -756,6 +787,37 @@ class CallSession:
             )
             return
         await self.send_audio(pcm)
+
+    async def _store_recording(self) -> None:
+        """Keep the call's audio, once the line has closed (§11.5).
+
+        Off the audio path by construction: nothing is sent to the caller any
+        more. A store that fails loses the recording and nothing else -- the
+        transcript and the call row were written as the call went on.
+        """
+        buffer = self._recording
+        repository = self._repository
+        if buffer is None or buffer.is_empty or repository is None or self.metadata is None:
+            return
+        if not getattr(repository, "persists", False):
+            return
+        reference = self._call_sid or str(self.call_id)
+        key = object_key(call_ref=reference, started_at=self.started_at)
+        try:
+            wav = buffer.to_wav()
+            await object_store().put(
+                key, wav, content_type="audio/wav", metadata={"call-ref": reference}
+            )
+            await repository.set_recording(
+                self.call_id,
+                self.started_at,
+                object_key=key,
+                duration_seconds=int(buffer.duration_s),
+            )
+        except Exception as exc:
+            log.warning("recording.store_failed", key=key, error=type(exc).__name__)
+            return
+        log.info("recording.stored", key=key, seconds=round(buffer.duration_s, 1))
 
     # -- persistence ------------------------------------------------------ #
 
@@ -958,7 +1020,7 @@ class CallSession:
         try:
             await announce(TRANSFER_FAILED_LINE_HI)
         except Exception as exc:
-            log.warning("call.transfer_fallback_failed", error=type(exc).__name__)
+            log.warning("call.transfer_fallback_failed", error=type(exc).__name__, exc_info=True)
 
     async def _record_transfer(self, reason: str, *, completed: bool) -> None:
         if self._repository is None:

@@ -37,6 +37,7 @@ from uaagro_domain.errors import (
     InvalidPhoneNumberError,
     MissingCredentialError,
     VendorError,
+    VendorUnavailableError,
 )
 from uaagro_domain.phone import normalise_msisdn, redact
 from uaagro_domain.settings import Settings
@@ -350,6 +351,47 @@ class TwilioAdapter(HttpTelephonyAdapter):
         await self._post(f"/Calls/{call_sid}.json", {"Status": "completed"})
 
 
+@dataclass
+class SimulatorAdapter(TelephonyAdapter):
+    """Call control with no line behind it, for development and demos.
+
+    ``originate`` dials nothing. It returns a synthetic call id and leaves
+    the campaign contact ringing; the browser test page answers the call
+    (``/dev/call?answer=<contact id>``), and from the start frame on the
+    worker runs exactly what it would run for a real line -- the script,
+    the recording, the live feed, the contact's outcome.
+
+    A transfer is refused rather than faked: the agent then makes the same
+    callback commitment it makes when no line is available, which is the
+    behaviour worth rehearsing.
+    """
+
+    settings: Settings
+    approved_destinations: frozenset[str] = frozenset()
+    provider: TelephonyProvider = TelephonyProvider.SIMULATOR
+
+    async def originate(
+        self, *, to: str, from_: str, callback_url: str, custom_field: str | None = None
+    ) -> str:
+        import uuid
+
+        assert_approved_destination(to, self.approved_destinations)
+        call_sid = f"sim-{uuid.uuid4().hex[:12]}"
+        log.info("telephony.simulated_dial", call_sid=call_sid, reference=custom_field)
+        return call_sid
+
+    async def transfer(self, *, call_sid: str, to: str, whisper_text: str | None = None) -> None:
+        raise VendorUnavailableError(
+            vendor="simulator", service="transfer", detail="no line to transfer on"
+        )
+
+    async def hangup(self, *, call_sid: str) -> None:
+        log.info("telephony.simulated_hangup", call_sid=call_sid)
+
+    async def aclose(self) -> None:
+        return None
+
+
 def flow_url(settings: Settings) -> str:
     """The App Bazaar flow Exotel runs when an outbound call is answered.
 
@@ -477,6 +519,8 @@ def build_adapter(settings: Settings, approved: frozenset[str] = frozenset()) ->
         return PlivoAdapter(settings=settings, approved_destinations=approved)
     if provider is TelephonyProvider.TWILIO:
         return TwilioAdapter(settings=settings, approved_destinations=approved)
+    if provider is TelephonyProvider.SIMULATOR:
+        return SimulatorAdapter(settings=settings, approved_destinations=approved)
     raise MissingCredentialError(
         variable="TELEPHONY_PROVIDER",
         needed_for=f"call control -- {provider.value} has no adapter",
@@ -488,6 +532,7 @@ __all__ = (
     "ExotelAdapter",
     "HttpTelephonyAdapter",
     "PlivoAdapter",
+    "SimulatorAdapter",
     "TwilioAdapter",
     "assert_approved_destination",
     "build_adapter",

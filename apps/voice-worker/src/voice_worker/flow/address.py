@@ -62,11 +62,55 @@ _FILLER = re.compile(
 #: of these, up to three words, is a backchannel rather than a turn.
 BACKCHANNELS: frozenset[str] = frozenset(
     {
-        "हाँ", "हां", "हा", "हँ", "जी", "हम्म", "हम्", "हूँ", "हूं", "अच्छा",
-        "ठीक", "है", "ओके", "ओ", "के", "सही", "बिल्कुल", "बिलकुल", "हैलो", "हेलो", "हलो",
-        "बताइए", "बताइये", "बताओ", "बोलिए", "बोलो", "सुन", "रहा", "रही", "समझ", "गया",
-        "गयी", "गई", "ok", "okay", "yes", "yeah", "hmm", "hm", "haan", "ha", "ji", "hello",
-        "achha", "acha", "theek", "thik", "right", "sahi",
+        "हाँ",
+        "हां",
+        "हा",
+        "हँ",
+        "जी",
+        "हम्म",
+        "हम्",
+        "हूँ",
+        "हूं",
+        "अच्छा",
+        "ठीक",
+        "है",
+        "ओके",
+        "ओ",
+        "के",
+        "सही",
+        "बिल्कुल",
+        "बिलकुल",
+        "हैलो",
+        "हेलो",
+        "हलो",
+        "बताइए",
+        "बताइये",
+        "बताओ",
+        "बोलिए",
+        "बोलो",
+        "सुन",
+        "रहा",
+        "रही",
+        "समझ",
+        "गया",
+        "गयी",
+        "गई",
+        "ok",
+        "okay",
+        "yes",
+        "yeah",
+        "hmm",
+        "hm",
+        "haan",
+        "ha",
+        "ji",
+        "hello",
+        "achha",
+        "acha",
+        "theek",
+        "thik",
+        "right",
+        "sahi",
     }
 )
 
@@ -121,7 +165,7 @@ def is_filler(sentence: str) -> bool:
 
 
 def is_backchannel(transcript: str) -> bool:
-    """"हाँ", "जी", "अच्छा", "ठीक है" -- a listener, not a question."""
+    """ "हाँ", "जी", "अच्छा", "ठीक है" -- a listener, not a question."""
     tokens = [w.lower() for w in words(transcript)]
     if not tokens or len(tokens) > 3:
         return False

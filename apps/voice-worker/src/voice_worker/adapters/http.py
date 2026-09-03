@@ -152,9 +152,7 @@ async def prewarm_connection(client: Any, path: str, *, timeout_s: float = 5.0) 
         log.info("http.prewarmed", host=str(client.base_url), status=status)
         return status < 500
     except Exception as exc:
-        log.warning(
-            "http.prewarm_failed", host=str(client.base_url), error=type(exc).__name__
-        )
+        log.warning("http.prewarm_failed", host=str(client.base_url), error=type(exc).__name__)
         return False
 
 

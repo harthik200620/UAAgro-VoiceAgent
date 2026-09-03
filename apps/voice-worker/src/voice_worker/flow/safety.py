@@ -77,13 +77,29 @@ REVIEW_WITHIN_HOURS = 1
 
 #: Something got into someone. Verbs and phrases, not nouns.
 _EXPOSURE_HI = (
-    "पी लिया", "पी ली", "पी लिये", "पी लिए",  # drank it
-    "खा लिया", "खा ली", "निगल", "निगल लिया",  # swallowed
-    "मुँह में चला गया", "मुंह में चला गया",
-    "आँख में", "आंख में", "आँखों में", "आंखों में",  # in the eyes
-    "साँस में", "सांस में", "सूँघ लिया", "सुंघ लिया",  # inhaled
-    "छिड़कते समय गिर", "ऊपर गिर गई", "ऊपर गिर गया",
-    "चमड़ी पर", "त्वचा पर लग",
+    "पी लिया",
+    "पी ली",
+    "पी लिये",
+    "पी लिए",  # drank it
+    "खा लिया",
+    "खा ली",
+    "निगल",
+    "निगल लिया",  # swallowed
+    "मुँह में चला गया",
+    "मुंह में चला गया",
+    "आँख में",
+    "आंख में",
+    "आँखों में",
+    "आंखों में",  # in the eyes
+    "साँस में",
+    "सांस में",
+    "सूँघ लिया",
+    "सुंघ लिया",  # inhaled
+    "छिड़कते समय गिर",
+    "ऊपर गिर गई",
+    "ऊपर गिर गया",
+    "चमड़ी पर",
+    "त्वचा पर लग",
 )
 
 #: Something spilled onto a person. A *pattern*, not a list of phrases: the
@@ -102,30 +118,65 @@ _SPILLED_ON_PERSON = re.compile(
     re.IGNORECASE,
 )
 _EXPOSURE_EN = (
-    "swallowed", "drank", "ingested", "inhaled", "breathed in",
-    "in my eye", "in his eye", "in her eye", "in the eyes", "in my eyes",
-    "spilled on", "splashed on", "on my skin", "got into my mouth",
+    "swallowed",
+    "drank",
+    "ingested",
+    "inhaled",
+    "breathed in",
+    "in my eye",
+    "in his eye",
+    "in her eye",
+    "in the eyes",
+    "in my eyes",
+    "spilled on",
+    "splashed on",
+    "on my skin",
+    "got into my mouth",
 )
 
 #: A person is in distress. These fire on their own -- someone unconscious after
 #: handling a product does not need the sentence to also contain a verb.
 _SYMPTOM_HI = (
-    "बेहोश", "बेहोशी",           # unconscious
-    "उल्टी", "उलटी", "क़ै", "कै",  # vomiting
-    "चक्कर",                     # dizzy
-    "झाग",                       # foaming
-    "दौरा", "मिर्गी",             # seizure
-    "साँस नहीं", "सांस नहीं", "दम घुट",  # cannot breathe
-    "जलन हो रही", "जल रही है",
-    "तड़प",                      # writhing
-    "अस्पताल", "हॉस्पिटल",        # already going to hospital
-    "ज़हर", "जहर", "विष",         # poison
+    "बेहोश",
+    "बेहोशी",  # unconscious
+    "उल्टी",
+    "उलटी",
+    "क़ै",
+    "कै",  # vomiting
+    "चक्कर",  # dizzy
+    "झाग",  # foaming
+    "दौरा",
+    "मिर्गी",  # seizure
+    "साँस नहीं",
+    "सांस नहीं",
+    "दम घुट",  # cannot breathe
+    "जलन हो रही",
+    "जल रही है",
+    "तड़प",  # writhing
+    "अस्पताल",
+    "हॉस्पिटल",  # already going to hospital
+    "ज़हर",
+    "जहर",
+    "विष",  # poison
 )
 _SYMPTOM_EN = (
-    "unconscious", "fainted", "passed out", "vomiting", "throwing up",
-    "seizure", "convulsion", "foaming", "cannot breathe", "can't breathe",
-    "difficulty breathing", "poisoned", "poisoning", "hospital", "emergency",
-    "burning skin", "dizzy",
+    "unconscious",
+    "fainted",
+    "passed out",
+    "vomiting",
+    "throwing up",
+    "seizure",
+    "convulsion",
+    "foaming",
+    "cannot breathe",
+    "can't breathe",
+    "difficulty breathing",
+    "poisoned",
+    "poisoning",
+    "hospital",
+    "emergency",
+    "burning skin",
+    "dizzy",
 )
 
 #: Marathi and Malayalam, per §16.1's "every supported language". Thin on
@@ -141,9 +192,17 @@ _EXPOSURE_ML = ("കുടിച്ചു", "വിഴുങ്ങി", "കണ�
 #: keyword scan: "ज़हरीली दवा" is how a farmer describes a strong insecticide,
 #: and "क्या यह ज़हरीला है?" is a product-safety question, not a poisoning.
 _NEGATIONS = (
-    "ज़हरीली दवा", "जहरीली दवा", "ज़हरीला है", "जहरीला है",
-    "ज़हरीली है", "जहरीली है", "कितना ज़हरीला", "कितना जहरीला",
-    "is it toxic", "how toxic", "toxicity",
+    "ज़हरीली दवा",
+    "जहरीली दवा",
+    "ज़हरीला है",
+    "जहरीला है",
+    "ज़हरीली है",
+    "जहरीली है",
+    "कितना ज़हरीला",
+    "कितना जहरीला",
+    "is it toxic",
+    "how toxic",
+    "toxicity",
 )
 
 

@@ -309,6 +309,18 @@ class ToolRegistry:
     def schemas(self, allowlist: Sequence[str]) -> list[dict[str, Any]]:
         return [tool.schema() for tool in self.allowed(allowlist)]
 
+    def restricted(self, allowlist: Sequence[str]) -> ToolRegistry:
+        """A registry holding only what this agent config allows (§10).
+
+        The allowlist used to be loaded from the published config, logged,
+        and never applied: every agent could run every tool. An empty
+        allowlist keeps the whole registry -- the panel's test question and
+        the tests build agents without a config.
+        """
+        if not allowlist:
+            return self
+        return ToolRegistry(tools={tool.name: tool for tool in self.allowed(allowlist)})
+
     async def execute(
         self,
         name: str,

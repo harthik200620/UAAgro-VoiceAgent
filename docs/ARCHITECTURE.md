@@ -1481,3 +1481,107 @@ The destination number never enters the model context or `call_turns`:
 Exotel accepts the transfer request as written is a Phase 5 item -- the
 shape is from the published API and a real hand-over is the check
 (`docs/VERIFICATION.md`, step 3).
+
+## The turns the model never sees, measured 3 September 2026 (afternoon)
+
+The morning's work had cut a turn from 3.5 s to about 2.5 s and the proxy's
+1.3–1.7 s first token was the wall. The afternoon's transcripts (persisted at
+last; see below) showed that the wall was not the worst of it. A farmer asked
+about potato seed, then "स्टॉक है क्या?", and the agent said the seed was
+out of stock and would arrive next week. It had looked nothing up: the stock
+tool had never been called (only `search_products` ever ran, and it returns
+no stock), and could not have answered anyway because no centre had been put
+on the tool context. The model was given a question and no facts, and it
+did what models do.
+
+Three changes, in the order they matter.
+
+### A centre for every call
+
+`assembly.build_call_pipeline` now resolves the centre the agent answers
+*for*: the farmer's own when the caller is known and assigned, else the
+organisation's **primary centre** (`centres.is_primary`, one per organisation,
+enforced by a partial unique index; Lucknow in the seed). It travels on
+`ToolContext.centre_id`, on `CallerContext.centre`, and as `CentreFacts` on
+the agent, which says so when it quotes the head office's stock rather than
+the caller's.
+
+### Focus, and answers from data (`flow/focus.py`, `flow/direct.py`)
+
+`ConversationFocus` is three slots — the product, the kind of product, the
+crop — filled from each user turn by the catalogue vocabulary and a short
+crop list, so that "स्टॉक है क्या?" two turns after "आलू का बीज" is a
+question about the potato seed. Crop names were also removed from the
+lexicon's *spoken forms*: "potato" answered to a seed, a fungicide and a
+spray at once, and resolved to whichever came first by SKU.
+
+`DirectAnswers` handles the intents whose answer is a row: price, stock,
+composition, the centre's address and hours, "what do you have", "can you
+hear me", "are you a machine". It resolves the product (words → catalogue
+vocabulary → kind + crop → the focus), calls the same tools the model would
+(`check_availability` with the centre code, `get_product_details`,
+`find_nearest_centre`), and composes the reply from templates in the
+farmers' register: whole rupees, "50 किलो का बैग", "लखनऊ सेंटर" rather than
+the registered name, a restock date or an alternative when out of stock, a
+question back when the product cannot be resolved, and a hand-over offer
+("जोड़ दूँ?") for a licensed product — a "हाँ" on the next turn is then a
+request for a person. Nothing in it is a model, so nothing in it can be wrong
+in a new way each time, and it cannot invent a stock-out.
+
+Measured on a persisted five-turn socket call (speech end → first reply
+audio): price 912 ms, crop + kind 683 ms, bare stock question 395 ms, centre
+605 ms, goodbye 776 ms. `calls.latency_stats` for the call: p50 321 ms, p95
+558 ms. What remains in those numbers is Soniox's endpoint and Bakbak's
+first byte; the model is not in them.
+
+### The register, after the model (`text/register.py`)
+
+For the turns that still need the model — advice, problems, schemes,
+anything from the knowledge base — the persona asks for the Hindi farmers
+speak and the model mostly complies. Mostly is not enough, so
+`farmers_register` runs on every generated sentence: a fixed table of the
+textbook words a model reaches for and the everyday word ("उर्वरक" → "खाद",
+"मूल्य" → "रेट", "उपलब्ध है" → "स्टॉक में है", "केंद्र प्रबंधक" → "सेंटर
+मैनेजर", "प्रतीक्षा" → "इंतज़ार" …), and stage directions in asterisks,
+brackets or parentheses removed — a synthesiser had been reading "(मैनेजर से
+कनेक्ट करने का प्रयास)" out loud. The filler check runs first, on the model's
+own words; the swap runs on what survives. The persona gained a "knowledge
+boundary" section: rate and stock are not the model's to state, advice comes
+only from `<reference>`, and what is not there is "पक्की जानकारी अभी मेरे पास
+नहीं है" plus the offer of a person.
+
+### Recordings exist now (`runtime/recording.py`, `uaagro_db/storage.py`)
+
+`RecordingBuffer` had been written and never wired. The session now appends
+both legs as frames pass (a few bytes per frame, on the audio path) and, once
+the line has closed, writes a two-channel WAV to the object store and puts the
+key on `calls.recording_object_key` — before the post-call job is queued, so
+the job finds it. The store has two backends behind one contract:
+`STORAGE_BACKEND=s3` (the bucket, SSE-KMS when a key is configured) and
+`STORAGE_BACKEND=local` (a directory, `STORAGE_LOCAL_DIR`; development,
+tests, a pilot without a bucket). Production refuses `local`. The panel's
+recording route streams from either; no URL is ever produced.
+
+### Browser calls are simulator calls; simulated dials are answered in the browser
+
+The test page announces itself (`?source=browser`) and its calls are recorded
+with `provider = simulator`: kept, listed, playable, and counted apart from
+real traffic. `TELEPHONY_PROVIDER=simulator` selects a `SimulatorAdapter`
+whose `originate` dials nothing and returns a synthetic id; the campaign
+contact stays ringing, the panel shows an "answer in browser" link
+(`/dev/call?answer=<contact id>`), and the page sends the contact reference in
+the start frame's `custom_parameters` exactly where Exotel would echo it. From
+there the worker runs what it would run for a real line: the outbound script,
+the farmer identified from the contact when the number is not usable, the
+recording, the live feed, the contact's outcome. A transfer is refused rather
+than faked, so the callback commitment is what gets rehearsed.
+
+### The client's database as a source
+
+UA Agro keeps stores, products and stock in MySQL. The platform stays on
+PostgreSQL — row-level security, vector search and the monthly partitions
+depend on it — and *pulls*: `data_sources` names the server and a mapping
+from their tables to ours, `data_source_runs` records each pull, and a sync
+upserts centres by code, products by SKU and stock by (centre, variant),
+never deleting. The password is ciphertext under the platform data key. The
+routes and the mapping's field lists are in `docs/ADMIN_API.md`.

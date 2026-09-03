@@ -24,6 +24,7 @@ there for this.
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -32,12 +33,15 @@ import structlog
 
 from uaagro_domain.enums import CallOutcome, Intent, TransferReason
 
+from ..text.register import farmers_register
 from ..text.speech import FIRST_CLAUSE_WORDS, SentenceBuffer, split_sentences
 from ..tools.base import ToolContext, ToolRegistry, ToolResult
 from .address import AddressBudget, trim_address
 from .closing import CLOSING_LINE_HI, farmer_is_done
 from .context import CallerContext, ContextBuilder, ConversationMemory, DynamicHint
+from .direct import DirectAnswers
 from .escalation import EscalationDecision, EscalationEngine, TransferRequest, TurnSignals
+from .focus import ConversationFocus
 from .intents import classify_by_rule, reconcile
 from .safety import SafetyVerdict, combine
 from .safety import detect as detect_safety
@@ -48,12 +52,27 @@ from .validator import (
     MAX_WORDS_DOSAGE,
     OutputValidator,
     ValidationOutcome,
+    has_recommendation,
 )
 
 log = structlog.get_logger(__name__)
 
+#: "Yes" to an offer the agent just made ("जोड़ दूँ?"). Short, and only
+#: meaningful on the turn right after the offer.
+_AFFIRM = re.compile(
+    r"^\s*(हाँ|हां|जी|जी हाँ|हाँ जी|हां जी|ठीक है|ठीक|ओके|ok|okay|yes|yeah|हाँ भाई|"
+    r"कर दो|कर दीजिए|करा दो|करा दीजिए|जोड़ दो|जोड़ दीजिए|जोड़ो|जोड़िए|बात करा दो|"
+    r"बात कराओ|please|प्लीज़|ज़रूर|जरूर)[\s।.!,]*(जी|सर|भाई)?[\s।.!]*$",
+    re.IGNORECASE,
+)
+
 #: Spoken before an immediate hand-over when no transfer tool is wired.
 TRANSFER_PLACEHOLDER_HI = "जी, मैं आपको हमारे साथी से जोड़ रहा हूँ। एक क्षण रुकिए।"
+#: Advice was asked for with no crop named: the lookup has nothing to go on.
+ASK_CROP_HI = "किस फ़सल के लिए, और कौन सी दवा या खाद? नाम बता दीजिए।"
+#: §16.2: no approved recommendation, so no advice -- said plainly, with the
+#: offer of a person. Spoken by the agent itself; the model is not asked.
+NO_ADVICE_HI = "इसकी पक्की जानकारी अभी मेरे पास नहीं है। मैं आपको सेंटर मैनेजर से जोड़ देता हूँ।"
 #: §12.3-6: what the caller hears when nobody can take the call right now.
 CALLBACK_COMMITMENT_HI = (
     "जी, अभी हमारे साथी से बात नहीं हो पा रही है। "
@@ -75,6 +94,8 @@ class TurnResult:
     cached: bool = False
     #: Set when the turn must not be followed by another agent turn (§12.1).
     ends_agent_turns: bool = False
+    #: True when the reply was composed from data without the model.
+    direct: bool = False
 
     @property
     def grounded_tools(self) -> list[ToolResult]:
@@ -96,6 +117,8 @@ class TurnResult:
             payload["safety"] = {"source": self.safety.source}
         if self.validation is not None and not self.validation.ok:
             payload["validation_failed"] = list(self.validation.rules)
+        if self.direct:
+            payload["direct"] = True
         return payload
 
 
@@ -155,6 +178,11 @@ class Agent:
     #: greeting), "सर" a couple of times a call, no "जी," openers. Applied to
     #: every sentence before it is validated, spoken or remembered.
     address: AddressBudget = field(default_factory=AddressBudget)
+    #: What the conversation is about: the product, its kind, the crop.
+    focus: ConversationFocus = field(default_factory=ConversationFocus)
+    #: Replies composed from data, for the turns that need no model. None
+    #: when the agent has no catalogue vocabulary (the panel's test question).
+    direct: DirectAnswers | None = None
     #: The pipeline may continue an interrupted answer when what interrupted
     #: it was only "हाँ". A scripted responder says no; this one says yes.
     resumes_after_backchannel: bool = True
@@ -210,6 +238,7 @@ class Agent:
         """
         self.memory.add("user", transcript)
         self._turn_open = True
+        self.focus.note_user_turn(transcript)
 
         safety = await self._check_safety(transcript)
         if safety.triggered:
@@ -220,6 +249,11 @@ class Agent:
             return self.last_turn, None
 
         intent = await self._classify(transcript)
+
+        answered = await self._answer_directly(transcript, intent)
+        if answered is not None:
+            return answered, None
+        self.focus.offered_transfer = False
 
         signals = TurnSignals(text=transcript, intent=intent, asr_confidence=asr_confidence)
         repeated = self.flow.intent_attempts.get(intent, 0) >= 1
@@ -232,6 +266,18 @@ class Agent:
             return self.last_turn, None
 
         results = await self._run_tools(intent, transcript)
+
+        if intent in _ADVICE_INTENTS and not has_recommendation([r.to_dict() for r in results]):
+            # §16.2: what to put on a crop comes from an approved
+            # recommendation or not at all. With none, the model is not
+            # asked -- it would answer from memory. A question with no crop
+            # in it gets the crop asked for; one with a crop and nothing
+            # approved hands the farmer to a person (§11.4: no dead ends).
+            if self.focus.crop is None and not _nothing_found(results):
+                self.last_turn = self._ask_for_crop(intent)
+            else:
+                self.last_turn = await self._honest_turn(intent)
+            return self.last_turn, None
 
         if not decision.escalate:
             # A tool that came back restricted or empty changes the picture, so
@@ -309,6 +355,11 @@ class Agent:
         return combine(keyword, classifier_says_emergency=None)
 
     async def _classify(self, transcript: str) -> Intent:
+        if self.focus.offered_transfer and _AFFIRM.search(transcript):
+            # "हाँ" right after "जोड़ दूँ?" is a request for a person, and
+            # §12.1 says a request for a person is honoured at once.
+            self.focus.offered_transfer = False
+            return Intent.TALK_TO_HUMAN
         rule = classify_by_rule(transcript)
         if rule.bypasses_llm or self.classifier is None:
             return rule.intent
@@ -326,11 +377,79 @@ class Agent:
         model_intent, confidence = answer
         return reconcile(rule, IntentResult(model_intent, confidence, "classifier")).intent
 
+    async def _answer_directly(self, transcript: str, intent: Intent) -> TurnResult | None:
+        """Answer from data when the turn needs no model (§9 Tier 1).
+
+        A failure here is not a failure of the turn: the model path is
+        still available, with the same tools, and takes over.
+        """
+        if self.direct is None:
+            return None
+        try:
+            reply = await self.direct.answer(transcript, intent, self.focus)
+        except Exception as exc:
+            log.warning("agent.direct_failed", error=type(exc).__name__)
+            return None
+        if reply is None:
+            return None
+        text = self._trim_whole(reply.text)[0]
+        self.memory.add("assistant", text)
+        self._turn_open = False
+        self.flow.record_turn(reply.intent, confident=True, resolved=True)
+        self.focus.offered_transfer = reply.offered_transfer
+        log.info("agent.direct", intent=reply.intent.value, tools=len(reply.results))
+        self.last_turn = TurnResult(
+            text=text,
+            intent=reply.intent,
+            tool_results=list(reply.results),
+            validation=ValidationOutcome(ok=True),
+            direct=True,
+        )
+        return self.last_turn
+
+    def _ask_for_crop(self, intent: Intent) -> TurnResult:
+        """Advice needs a crop and a product before anything can be looked up."""
+        self.memory.add("assistant", ASK_CROP_HI)
+        self._turn_open = False
+        self.flow.record_turn(intent, confident=True, resolved=False)
+        return TurnResult(
+            text=ASK_CROP_HI, intent=intent, validation=ValidationOutcome(ok=True), direct=True
+        )
+
+    async def _honest_turn(self, intent: Intent) -> TurnResult:
+        """ "No firm information", said plainly, then a person (§11.4, §16.2).
+
+        The same escalation the validator's exhausted path raises, reached
+        before a model call instead of after two. The transfer tool picks who
+        takes the call; the loop carries it out once the line is spoken.
+        """
+        decision = EscalationDecision(
+            escalate=True,
+            reason=TransferReason.MISSING_DATA,
+            detail="no approved recommendation for this crop (§16.2)",
+        )
+        turn = TurnResult(
+            text=NO_ADVICE_HI,
+            intent=intent,
+            escalation=decision,
+            validation=ValidationOutcome(ok=True),
+            direct=True,
+            ends_agent_turns=True,
+        )
+        turn = await self._with_transfer(turn)
+        self.memory.add("assistant", turn.text)
+        self._turn_open = False
+        self.flow.record_turn(intent, confident=True, resolved=False)
+        if self.flow.can(CallState.ESCALATE):
+            self.flow.to(CallState.ESCALATE, reason=TransferReason.MISSING_DATA.value)
+        log.info("agent.no_approved_advice", intent=intent.value)
+        return turn
+
     async def _run_tools(self, intent: Intent, transcript: str) -> list[ToolResult]:
         """Call the tools §11.2 routes this intent to. At most two (§6.3)."""
         from .intents import TOOL_HINTS
 
-        planned = _plan(intent, transcript, TOOL_HINTS.get(intent, ()))
+        planned = _plan(intent, transcript, TOOL_HINTS.get(intent, ()), crop=self.focus.crop)
         if not planned:
             return []
         return await self.registry.execute_many(planned, self.tool_context)
@@ -401,7 +520,7 @@ class Agent:
             sir_allowed=self.address.sir_allowed,
             sir_used=self.address.sir_used,
         )
-        kept = [trim_address(s, scratch) for s in split_sentences(text)]
+        kept = [farmers_register(trim_address(s, scratch)) for s in split_sentences(text)]
         return " ".join(s for s in kept if s).strip(), scratch.sir_used
 
     # -- ending the call ------------------------------------------------------ #
@@ -569,7 +688,13 @@ class Agent:
             return
         fixed, prepared = await self._prepare(transcript)
         if fixed is not None:
-            yield fixed.text
+            if fixed.direct:
+                # Sentence by sentence, like a generated answer: the first
+                # one is on its way to the synthesiser while the rest waits.
+                for sentence in split_sentences(fixed.text):
+                    yield sentence
+            else:
+                yield fixed.text
             return
         assert prepared is not None
 
@@ -610,7 +735,9 @@ class Agent:
 
         try:
             async for raw in self._generate_sentences(built):
-                sentence = trim_address(raw, self.address)
+                # The filler check first, on the model's own words; the register
+                # swap after, on what survives.
+                sentence = farmers_register(trim_address(raw, self.address))
                 if not sentence:
                     # A filler sentence, or one that was only a vocative.
                     continue
@@ -714,6 +841,13 @@ _OPENING_TOOL: dict[Intent, tuple[str, str, int]] = {
     Intent.PROBLEM_DIAGNOSIS: ("search_knowledge", "query", 300),
     Intent.SCHEME_QUERY: ("search_knowledge", "query", 300),
     Intent.DOSAGE_QUERY: ("search_products", "query", 200),
+    # What the company offers and how big it is live in the knowledge base.
+    # The address and hours of a centre never reach the model -- the direct
+    # layer answers those -- so what does reach it is "how many centres" and
+    # "do you spray by drone", which the persona alone was answering from
+    # thin air.
+    Intent.SERVICE_REQUEST: ("search_knowledge", "query", 300),
+    Intent.CENTRE_LOCATION: ("search_knowledge", "query", 300),
 }
 
 
@@ -747,7 +881,7 @@ TOKENS_PER_WORD_CEILING = 3.5
 
 
 def _plan(
-    intent: Intent, transcript: str, hints: Sequence[str]
+    intent: Intent, transcript: str, hints: Sequence[str], *, crop: str | None = None
 ) -> list[tuple[str, Mapping[str, Any]]]:
     """Which tools to open with, with arguments taken from the transcript.
 
@@ -762,12 +896,24 @@ def _plan(
     learn nothing and put an irrelevant result in front of the model.
     """
     route = _OPENING_TOOL.get(intent)
+    planned: list[tuple[str, Mapping[str, Any]]] = []
     if route is not None:
         name, argument, limit = route
-        return [(name, {argument: transcript[:limit]})]
+        planned.append((name, {argument: transcript[:limit]}))
+    if intent in _ADVICE_INTENTS and crop is not None:
+        # The crop is known from the conversation, not guessed: the focus
+        # read it off the farmer's own words. The approved recommendation --
+        # if there is one -- is what grounds any advice this turn gives.
+        planned.append(("recommend_for_crop", {"crop": crop}))
+    if planned:
+        return planned
     if "search_knowledge" in hints:
         return [("search_knowledge", {"query": transcript[:300]})]
     return []
+
+
+#: Intents whose answer is "put this on the crop" (§16.2).
+_ADVICE_INTENTS = frozenset({Intent.CROP_RECOMMENDATION, Intent.DOSAGE_QUERY})
 
 
 def _any_restricted(results: Sequence[ToolResult]) -> bool:
@@ -785,4 +931,4 @@ def _nothing_found(results: Sequence[ToolResult]) -> bool:
     return all(not r.ok or not r.data or r.data.get("answered") is False for r in results)
 
 
-__all__ = ("Agent", "ClosedCall", "IntentClassifier", "TurnResult")
+__all__ = ("ASK_CROP_HI", "NO_ADVICE_HI", "Agent", "ClosedCall", "IntentClassifier", "TurnResult")

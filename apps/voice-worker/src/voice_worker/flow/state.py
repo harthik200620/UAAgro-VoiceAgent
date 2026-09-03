@@ -73,12 +73,8 @@ TRANSITIONS: dict[CallState, frozenset[CallState]] = {
     CallState.SCREEN: frozenset({CallState.GREET, CallState.REJECT}),
     CallState.GREET: frozenset({CallState.LANG_LOCK}),
     CallState.LANG_LOCK: frozenset({CallState.DISCOVER, CallState.ESCALATE}),
-    CallState.DISCOVER: frozenset(
-        {CallState.RESOLVE, CallState.ESCALATE, CallState.WRAP}
-    ),
-    CallState.RESOLVE: frozenset(
-        {CallState.DISCOVER, CallState.ESCALATE, CallState.WRAP}
-    ),
+    CallState.DISCOVER: frozenset({CallState.RESOLVE, CallState.ESCALATE, CallState.WRAP}),
+    CallState.RESOLVE: frozenset({CallState.DISCOVER, CallState.ESCALATE, CallState.WRAP}),
     CallState.WRAP: frozenset({CallState.END, CallState.DISCOVER}),
     # §12.3-6: when the chain is exhausted the caller gets a commitment, not a
     # ring-out. Both edges exist so neither outcome is a dead end.
@@ -158,9 +154,7 @@ class CallFlow:
 
     # -- §11.4 counters ---------------------------------------------------- #
 
-    def record_turn(
-        self, intent: Intent, *, confident: bool, resolved: bool
-    ) -> str | None:
+    def record_turn(self, intent: Intent, *, confident: bool, resolved: bool) -> str | None:
         """Update the escalation counters. Returns a reason when one trips.
 
         Returning the reason rather than escalating here keeps this a decision

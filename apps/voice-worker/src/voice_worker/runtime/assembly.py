@@ -61,6 +61,7 @@ from ..flow.address import AddressBudget, name_forms
 from ..flow.agent import Agent
 from ..flow.closing import SILENCE_PROMPT_HI, SILENCE_WARN_HI
 from ..flow.context import CallerContext, ContextBuilder, DynamicHint
+from ..flow.direct import CentreFacts, DirectAnswers
 from ..flow.escalation import EscalationEngine
 from ..flow.state import CallFlow
 from ..flow.validator import OutputValidator
@@ -279,6 +280,31 @@ async def identify_caller(
 
     if farmer is None:
         return Caller(language=default_language)
+    return _caller_of(farmer, default_language)
+
+
+async def identify_farmer(
+    session: AsyncSession, farmer_id: uuid.UUID, *, default_language: str
+) -> Caller:
+    """The farmer a campaign contact belongs to.
+
+    For an outbound call whose start frame carries no usable number -- the
+    browser page answering a simulated dial -- the contact still knows who
+    was being called, and the greeting should say their name.
+    """
+    try:
+        farmer = await session.scalar(
+            select(Farmer).where(Farmer.id == farmer_id, Farmer.deleted_at.is_(None))
+        )
+    except Exception as exc:
+        log.warning("assembly.farmer_lookup_failed", error=type(exc).__name__)
+        return Caller(language=default_language)
+    if farmer is None:
+        return Caller(language=default_language)
+    return _caller_of(farmer, default_language)
+
+
+def _caller_of(farmer: Farmer, default_language: str) -> Caller:
     return Caller(
         farmer_id=farmer.id,
         name=farmer.full_name,
@@ -290,6 +316,28 @@ async def identify_caller(
         last4=farmer.phone_last4,
         centre_id=farmer.assigned_centre_id,
     )
+
+
+async def primary_centre(session: AsyncSession) -> Centre | None:
+    """The head office: where the helpline answers stock for an unknown caller.
+
+    ``None`` when no centre is marked primary. The agent then asks the farmer
+    which centre they mean rather than picking one for them.
+    """
+    try:
+        centre: Centre | None = await session.scalar(
+            select(Centre)
+            .where(
+                Centre.is_primary.is_(True),
+                Centre.is_active.is_(True),
+                Centre.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+    except Exception as exc:
+        log.warning("assembly.primary_centre_failed", error=type(exc).__name__)
+        return None
+    return centre
 
 
 async def _centre_named(session: AsyncSession, centre_id: uuid.UUID | None) -> Centre | None:
@@ -475,7 +523,17 @@ async def build_call_pipeline(
         session, organization_id=organization_id, flow_type=flow_type, config_id=pinned
     )
     caller = await identify_caller(session, phone_hash, default_language=defaults.default_language)
+    if not caller.known and contact is not None and contact.farmer_id is not None:
+        caller = await identify_farmer(
+            session, contact.farmer_id, default_language=defaults.default_language
+        )
     centre = await _centre_named(session, caller.centre_id)
+    # The centre the agent answers stock and price for. A caller the helpline
+    # does not know has no centre of their own, and a lookup with no centre
+    # had no answer -- the model was left to say "not in stock" about a
+    # product it had never looked up. The head office stands in, and the
+    # agent says so.
+    answering_for = centre if centre is not None else await primary_centre(session)
 
     # §5.1's declarative routing. Chosen from the caller's language, which is
     # why the lookup comes first.
@@ -521,11 +579,15 @@ async def build_call_pipeline(
             inbound = None
         if inbound is not None:
             agent = build_agent(
-                registry=registry,
+                registry=registry.restricted(inbound.tool_allowlist),
                 persona=inbound.system_prompt,
                 gateway=resolved_gateway,
                 caller=caller,
                 call_id=call_id,
+                centre=answering_for,
+                own_centre=centre is not None,
+                organization_id=organization_id,
+                lexicon=lexicon,
                 # Press 2 is answered by the helpline agent, but on an
                 # outbound call: it may quote the campaign's own material and
                 # not documents kept for the helpline.
@@ -552,11 +614,15 @@ async def build_call_pipeline(
             )
     else:
         agent = build_agent(
-            registry=registry,
+            registry=registry.restricted(agent_settings.tool_allowlist),
             persona=agent_settings.system_prompt,
             gateway=resolved_gateway,
             caller=caller,
             call_id=call_id,
+            centre=answering_for,
+            own_centre=centre is not None,
+            organization_id=organization_id,
+            lexicon=lexicon,
             direction=CallDirection.INBOUND.value,
         )
         responder = agent
@@ -646,6 +712,10 @@ def build_agent(
     caller: Caller,
     call_id: uuid.UUID,
     direction: str | None = None,
+    centre: Centre | None = None,
+    own_centre: bool = False,
+    organization_id: uuid.UUID | None = None,
+    lexicon: Lexicon | None = None,
 ) -> Agent:
     """The DISCOVER ⇄ RESOLVE agent for one call, or for one panel question.
 
@@ -653,6 +723,17 @@ def build_agent(
     panel gets exactly the answer a caller would -- same persona, same tools,
     same validator, same refusal to invent a dose.
     """
+    # The centre and farmer the tools work for. Without these every stock
+    # lookup failed to resolve a centre, and the farmer's own record was
+    # invisible to the hand-over tool.
+    tool_context = ToolContext(
+        call_id=str(call_id),
+        direction=direction,
+        farmer_id=str(caller.farmer_id) if caller.farmer_id is not None else None,
+        centre_id=str(centre.id) if centre is not None else None,
+        organization_id=str(organization_id) if organization_id is not None else None,
+    )
+    facts = CentreFacts.of(centre, own=own_centre) if centre is not None else None
     return Agent(
         registry=registry,
         context_builder=ContextBuilder(persona=persona),
@@ -663,11 +744,15 @@ def build_agent(
             name=caller.name,
             village=caller.village,
             language=caller.language,
+            centre=facts.name if facts is not None else None,
         ),
         hint=DynamicHint(),
         flow=CallFlow(),
-        tool_context=ToolContext(call_id=str(call_id), direction=direction),
+        tool_context=tool_context,
         address=AddressBudget(name_forms=name_forms(caller.name)),
+        direct=DirectAnswers(
+            registry=registry, context=tool_context, lexicon=lexicon, centre=facts
+        ),
     )
 
 
@@ -713,6 +798,8 @@ __all__ = (
     "build_call_pipeline",
     "find_outbound_contact",
     "identify_caller",
+    "identify_farmer",
     "load_agent_settings",
+    "primary_centre",
     "render_greeting",
 )

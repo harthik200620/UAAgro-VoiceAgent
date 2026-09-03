@@ -70,6 +70,7 @@ async def _noop() -> None:
     generator, which cannot be wrapped in `call` without consuming it."""
     return None
 
+
 DEFAULT_BASE_URL = "https://hub.getraya.app/v1"
 AUTH_HEADER = "X-API-Key"
 STREAM_PATH = "/text-to-speech/stream"
@@ -259,9 +260,7 @@ class BakbakTTS(TTSService):
                 lines = response.aiter_lines()
                 while True:
                     budget = (
-                        FIRST_BYTE_TIMEOUT_S
-                        if first
-                        else max(0.1, deadline - time.perf_counter())
+                        FIRST_BYTE_TIMEOUT_S if first else max(0.1, deadline - time.perf_counter())
                     )
                     try:
                         line = await asyncio.wait_for(anext(lines), timeout=budget)

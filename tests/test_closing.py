@@ -252,3 +252,24 @@ async def test_a_voice_resets_the_silence_ladder() -> None:
     assert prompts_by_then == 0, "the ladder did not start over when the farmer spoke"
     assert hung_up.is_set(), "the restarted ladder never closed the call"
     assert [t.response for t in h.pipeline.turns].count(SILENCE_PROMPT_HI) == 1
+
+
+async def test_an_announcement_during_the_ladder_does_not_collide_with_it() -> None:
+    """A hand-over that failed is announced while the silence clock is
+    running. Two speakers on one paced sender used to collide (a TypeError
+    mid-play); now the announcement takes the floor and the clock restarts."""
+    answer = Responder(["डीएपी की बोरी उपलब्ध है।"])
+    async with Harness([(0.0, end("डीएपी का रेट बताइए"))], answer, tts_ms=100) as h:
+        h.pipeline.silence = SilenceLadder(prompt_s=0.4, warn_s=0.8, close_s=6.0)
+        await asyncio.sleep(0.35)
+        line = "अभी हमारे साथी से बात नहीं हो पा रही है। मैंने आपकी बात दर्ज कर ली है, केंद्र से फ़ोन आएगा।"
+        await h.pipeline.announce(line)
+        await asyncio.sleep(1.4)
+
+    said = [t.response for t in h.pipeline.turns]
+    assert line in said
+    # The ladder started over after the announcement: its first prompt came
+    # again, and it did not race ahead to the goodbye.
+    assert said.count(SILENCE_PROMPT_HI) >= 1
+    assert CLOSING_LINE_HI not in said
+    assert h.pipeline.call_outcome is None

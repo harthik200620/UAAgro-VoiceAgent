@@ -390,9 +390,7 @@ async def _organization_id(session: AsyncSession, context: ToolContext) -> uuid.
     return found
 
 
-async def _history(
-    session: AsyncSession, farmer_id: uuid.UUID, digest: bytes
-) -> dict[str, Any]:
+async def _history(session: AsyncSession, farmer_id: uuid.UUID, digest: bytes) -> dict[str, Any]:
     """Orders, tickets, call count and messaging consent in one statement.
 
     Four independent lookups that all key on the same farmer. Issued separately
@@ -462,10 +460,7 @@ async def _history(
     )
 
     calls = (
-        select(func.count())
-        .select_from(Call)
-        .where(Call.farmer_id == farmer_id)
-        .scalar_subquery()
+        select(func.count()).select_from(Call).where(Call.farmer_id == farmer_id).scalar_subquery()
     )
 
     now = datetime.now(UTC)
@@ -490,9 +485,7 @@ async def _history(
         .scalar_subquery()
     )
 
-    row = (
-        await session.execute(select(orders, tickets, calls, consented, blocked))
-    ).one()
+    row = (await session.execute(select(orders, tickets, calls, consented, blocked))).one()
     recent_orders, open_tickets, call_count, consent_count, block_count = row
 
     return {
@@ -539,9 +532,7 @@ async def _open_tickets(session: AsyncSession, farmer_id: uuid.UUID) -> list[dic
             .limit(HISTORY_LIMIT)
         )
     ).all()
-    return [
-        {"ticket_ref": t.ticket_ref, "type": t.type.value, "subject": t.subject} for t in rows
-    ]
+    return [{"ticket_ref": t.ticket_ref, "type": t.type.value, "subject": t.subject} for t in rows]
 
 
 async def _call_count(session: AsyncSession, farmer_id: uuid.UUID) -> int:
@@ -551,9 +542,7 @@ async def _call_count(session: AsyncSession, farmer_id: uuid.UUID) -> int:
     return int(count or 0)
 
 
-async def _may_send_whatsapp(
-    session: AsyncSession, farmer: Farmer, digest: bytes
-) -> bool:
+async def _may_send_whatsapp(session: AsyncSession, farmer: Farmer, digest: bytes) -> bool:
     """§18: promotional consent expires, and DND is not waived by a purchase."""
     dnd: DndStatus | None = await session.scalar(
         select(DndStatus).where(DndStatus.phone_hash == digest)
@@ -578,8 +567,12 @@ async def _may_send_whatsapp(
 async def _order_payload(session: AsyncSession, order: Order) -> dict[str, Any]:
     items = (
         await session.execute(
-            select(OrderItem, Product.name_hi, ProductVariant.pack_size_value,
-                   ProductVariant.pack_size_unit)
+            select(
+                OrderItem,
+                Product.name_hi,
+                ProductVariant.pack_size_value,
+                ProductVariant.pack_size_unit,
+            )
             .join(ProductVariant, OrderItem.variant_id == ProductVariant.id)
             .join(Product, ProductVariant.product_id == Product.id)
             .where(OrderItem.order_id == order.id)

@@ -106,6 +106,9 @@ PAGE = """<!doctype html>
     "haan". The log shows how long each reply took after you went quiet.</p>
 </main>
 <script>
+// ?answer=<contact id>: this page answers an outbound call the dialer
+// placed in simulator mode (see adapters/telephony/control.py).
+const answering = new URLSearchParams(location.search).get("answer");
 const RATE = 8000, FRAME = 160;           // 20 ms of 8 kHz mono
 const JITTER_S = 0.06;                    // playback runs this far behind arrival
 const $ = (id) => document.getElementById(id);
@@ -191,6 +194,10 @@ async function start() {
         from: $("from").value.trim(),
         to: "browser-test",
         account_sid: "browser",
+        // Answering an outbound call the dialer placed in simulator mode:
+        // the contact reference rides in the same field a real provider
+        // echoes back, so the worker treats this as the call it dialled.
+        custom_parameters: answering ? { custom_field: "contact:" + answering } : {},
       },
     }));
     started = true;
@@ -389,7 +396,7 @@ def register_browser_call(app: FastAPI) -> None:
         # operator pasting a token into a query string, and getting a bare 403
         # from the socket when they forgot.
         token = get_settings().telephony_ws_token
-        query = f"?token={quote(token, safe='')}" if token else ""
+        query = "?source=browser" + (f"&token={quote(token, safe='')}" if token else "")
         return Response(
             PAGE.replace("__SOCKET_QUERY__", query), media_type="text/html; charset=utf-8"
         )

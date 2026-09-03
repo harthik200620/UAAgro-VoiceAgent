@@ -62,8 +62,7 @@ _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 #: of half-working: the failure is silent and looks like the document simply
 #: had no dosage in it.
 _DOSE_LINE = re.compile(
-    r"\d+(?:\.\d+)?\s*"
-    + whole_word("ml|ग्राम|gram|g|kg|किलो|लीटर|litre|liter|l|बोरी|बोतल"),
+    r"\d+(?:\.\d+)?\s*" + whole_word("ml|ग्राम|gram|g|kg|किलो|लीटर|litre|liter|l|बोरी|बोतल"),
     re.IGNORECASE,
 )
 _SENTENCE_END = re.compile(r"(?<=[।.!?])\s+")

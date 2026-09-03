@@ -140,10 +140,7 @@ async def _status(args: argparse.Namespace) -> int:
     for row in rows:
         state = "published" if row.is_published else "DRAFT -- not servable"
         unpublished += 0 if row.is_published else 1
-        _out(
-            f"{row.title[:44]:<44} {row.version:>4} {row.chunks:>7} "
-            f"{row.embedded:>8}  {state}"
-        )
+        _out(f"{row.title[:44]:<44} {row.version:>4} {row.chunks:>7} {row.embedded:>8}  {state}")
     if unpublished:
         # §9 requires the admin panel to carry this banner until the queue is
         # empty. The CLI says the same thing for anyone working without it.

@@ -63,9 +63,7 @@ async def campaign(app_engine) -> AsyncIterator[uuid.UUID]:  # type: ignore[no-u
         )
         assert len(user_ids) == 2, "the seeds should provide at least two users"
         creator_id, approver_id = user_ids
-        farmers = list(
-            (await session.scalars(select(Farmer).limit(3))).all()
-        )
+        farmers = list((await session.scalars(select(Farmer).limit(3))).all())
         assert len(farmers) == 3
 
         row = Campaign(
@@ -76,9 +74,7 @@ async def campaign(app_engine) -> AsyncIterator[uuid.UUID]:  # type: ignore[no-u
             # 10:00 IST today: inside §18's window, and in the past, so the
             # gate's dial-time check passes whatever hour the suite runs at.
             # The dialer's *live* window check is patched separately above.
-            scheduled_start=datetime.now(ist()).replace(
-                hour=10, minute=0, second=0, microsecond=0
-            ),
+            scheduled_start=datetime.now(ist()).replace(hour=10, minute=0, second=0, microsecond=0),
             # A 140-series CLI: §18 requires one for promotional calls, and the
             # gate blocks the campaign without it.
             caller_id_number="1400112233",
@@ -129,8 +125,10 @@ async def campaign(app_engine) -> AsyncIterator[uuid.UUID]:  # type: ignore[no-u
                 text("DELETE FROM consent_records WHERE farmer_id = :f"), {"f": farmer_id}
             )
             await session.execute(
-                text("DELETE FROM dnd_status WHERE phone_hash = "
-                     "(SELECT phone_hash FROM farmers WHERE id = :f)"),
+                text(
+                    "DELETE FROM dnd_status WHERE phone_hash = "
+                    "(SELECT phone_hash FROM farmers WHERE id = :f)"
+                ),
                 {"f": farmer_id},
             )
         await session.commit()
@@ -183,13 +181,9 @@ class RecordingDialer:
 # --------------------------------------------------------------------------- #
 
 
-async def test_an_approved_campaign_dials_its_contacts(
-    sessions, campaign
-) -> None:  # type: ignore[no-untyped-def]
+async def test_an_approved_campaign_dials_its_contacts(sessions, campaign) -> None:  # type: ignore[no-untyped-def]
     provider = RecordingDialer()
-    report = await run_campaign(
-        sessions, campaign, originate=provider, calls_per_minute=6000
-    )
+    report = await run_campaign(sessions, campaign, originate=provider, calls_per_minute=6000)
 
     assert report.dialled == 3
     assert len(provider.calls) == 3
@@ -225,17 +219,13 @@ async def test_a_farmer_who_opted_out_after_approval_is_not_dialled(
         await session.commit()
 
     provider = RecordingDialer()
-    report = await run_campaign(
-        sessions, campaign, originate=provider, calls_per_minute=6000
-    )
+    report = await run_campaign(sessions, campaign, originate=provider, calls_per_minute=6000)
 
     assert report.dialled == 2, "the opted-out farmer was dialled"
     assert report.skipped == 1
 
 
-async def test_a_blocked_campaign_never_dials_anybody(
-    app_engine, sessions, campaign
-) -> None:  # type: ignore[no-untyped-def]
+async def test_a_blocked_campaign_never_dials_anybody(app_engine, sessions, campaign) -> None:  # type: ignore[no-untyped-def]
     """§13.1: the blocking checks are non-overridable.
 
     A promotional campaign on an ordinary CLI is a TCCCPR violation on every
@@ -265,9 +255,7 @@ async def test_a_blocked_campaign_never_dials_anybody(
         assert row.status is CampaignStatus.PAUSED
 
 
-async def test_every_decryption_is_audited(
-    app_engine, sessions, campaign
-) -> None:  # type: ignore[no-untyped-def]
+async def test_every_decryption_is_audited(app_engine, sessions, campaign) -> None:  # type: ignore[no-untyped-def]
     """§17: plaintext is a privileged operation, and the audit row is the
     answer to "who saw this number and why"."""
     maker = async_sessionmaker(app_engine, expire_on_commit=False)
@@ -312,9 +300,7 @@ async def test_every_decryption_is_audited(
         assert not any(chunk.isdigit() and len(chunk) >= 10 for chunk in serialised.split())
 
 
-async def test_a_farmer_not_on_the_list_cannot_be_dialled(
-    app_engine, sessions, campaign
-) -> None:  # type: ignore[no-untyped-def]
+async def test_a_farmer_not_on_the_list_cannot_be_dialled(app_engine, sessions, campaign) -> None:  # type: ignore[no-untyped-def]
     """§17's destination rule, at the only point it can still be enforced.
 
     The number is produced by this code rather than supplied to it, so an
@@ -338,9 +324,30 @@ async def test_a_farmer_not_on_the_list_cannot_be_dialled(
             await _plaintext_number(session, excluded, campaign_id=campaign)
 
 
-async def test_a_failed_dial_does_not_abandon_the_rest_of_the_list(
-    sessions, campaign
+async def test_the_dialer_gets_the_number_in_e164_not_the_redacted_form(
+    app_engine, sessions, campaign
 ) -> None:  # type: ignore[no-untyped-def]
+    """The number type redacts itself when printed -- deliberately -- and the
+    dialer once handed the adapter that redacted form. Every dial then failed
+    as an unparseable destination before anything rang."""
+    from worker.campaign import _plaintext_number
+
+    maker = async_sessionmaker(app_engine, expire_on_commit=False)
+    async with maker() as session:
+        await session.execute(text("SELECT set_config('app.role','ops_manager',true)"))
+        listed = await session.scalar(
+            select(CampaignContact.farmer_id)
+            .where(CampaignContact.campaign_id == campaign)
+            .limit(1)
+        )
+        assert listed is not None
+        number = await _plaintext_number(session, listed, campaign_id=campaign)
+
+    assert number.startswith("+91") and len(number) == 13 and number[1:].isdigit()
+    assert "*" not in number
+
+
+async def test_a_failed_dial_does_not_abandon_the_rest_of_the_list(sessions, campaign) -> None:  # type: ignore[no-untyped-def]
     """One carrier rejection is not a reason to stop calling everybody else."""
     attempts = 0
 
