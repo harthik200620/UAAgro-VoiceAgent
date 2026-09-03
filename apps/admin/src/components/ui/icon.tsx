@@ -13,6 +13,36 @@ const PATHS = {
       <path d="M10 9c0-3-2.5-5-6-5 0 3 2.5 5 6 5z" />
     </>
   ),
+  overview: (
+    <>
+      <rect x="3" y="3" width="6" height="6" rx="1.5" />
+      <rect x="11" y="3" width="6" height="6" rx="1.5" />
+      <rect x="3" y="11" width="6" height="6" rx="1.5" />
+      <rect x="11" y="11" width="6" height="6" rx="1.5" />
+    </>
+  ),
+  book: (
+    <>
+      <path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H16v12H5.5A1.5 1.5 0 0 0 4 16.5z" />
+      <path d="M4 16.5A1.5 1.5 0 0 1 5.5 15H16v2H5.5" />
+    </>
+  ),
+  table: (
+    <>
+      <rect x="3" y="4" width="14" height="12" rx="1.5" />
+      <path d="M3 8h14M3 12h14M8 8v8" />
+    </>
+  ),
+  chart: <path d="M3 17h14M6 14V9M10 14V5M14 14v-3" />,
+  refresh: <path d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3.5h-3.5" />,
+  external: <path d="M11 4h5v5M16 4l-7 7M14 11v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h4" />,
+  star: <path d="M10 3l2.2 4.6 5 .7-3.6 3.5.9 5L10 14.4l-4.5 2.4.9-5L2.8 8.3l5-.7z" />,
+  warning: (
+    <>
+      <path d="M10 3l7.5 13h-15z" />
+      <path d="M10 8v4M10 14v.5" />
+    </>
+  ),
   live: <polyline points="2 10 6 10 8 4 12 16 14 10 18 10" />,
   phone: (
     <path d="M4 3h3l1.5 4-2 1.5a10 10 0 0 0 5 5L13 11.5l4 1.5v3a1 1 0 0 1-1 1A14 14 0 0 1 3 4a1 1 0 0 1 1-1z" />

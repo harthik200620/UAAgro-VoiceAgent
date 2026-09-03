@@ -16,7 +16,8 @@ export const dynamic = "force-dynamic";
 /**
  * One script open in the editor. The version list on the left and the
  * versions card on the right come from the same fetch; the script body and
- * the prompt come from the version itself.
+ * the prompt come from the version itself. For the helpline the prompt is
+ * editable; an outbound flow shows whatever persona it carries read-only.
  */
 export default async function FlowPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -26,6 +27,9 @@ export default async function FlowPage({ params }: { params: Promise<{ id: strin
   const [t, flow] = await Promise.all([getTranslations("flows"), getFlow(session, id)]);
   const groups = groupScripts(await getFlows(session, flow.flowType));
   const versions = groups.find((group) => group.name === flow.name)?.versions ?? [flow];
+  const inbound = flow.flowType === "inbound";
+  // `defaults` arrived with the 3 September contract; without it there is simply nothing to restore.
+  const defaultPrompt = flow.defaults?.systemPrompt ?? null;
 
   return (
     <>
@@ -43,6 +47,7 @@ export default async function FlowPage({ params }: { params: Promise<{ id: strin
             publishedAt: flow.publishedAt,
           }}
           script={flow.script}
+          prompt={inbound ? { text: flow.systemPrompt ?? "", defaultText: defaultPrompt } : null}
           versions={versions.map((version) => ({
             id: version.id,
             version: version.version,
@@ -53,9 +58,8 @@ export default async function FlowPage({ params }: { params: Promise<{ id: strin
           }))}
           nextVersion={nextVersion(versions)}
           canPublish={can(session, "flows.publish")}
-          destination="flows"
         >
-          {flow.systemPrompt ? <SystemPrompt prompt={flow.systemPrompt} /> : null}
+          {!inbound && flow.systemPrompt ? <SystemPrompt prompt={flow.systemPrompt} /> : null}
         </ScriptWorkbench>
       </div>
     </>

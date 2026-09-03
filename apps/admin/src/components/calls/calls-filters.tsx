@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Field, inputClass } from "@/components/ui/field";
 import { Link } from "@/i18n/routing";
 import type { CentreRow } from "@/lib/contract";
+import { KNOWN_OUTCOMES } from "@/lib/tones";
 
 export type CallFilters = {
   from?: string;
@@ -12,6 +13,8 @@ export type CallFilters = {
   outcome?: string;
   centre?: string;
   q?: string;
+  /** "1" when test calls are to be listed too. */
+  test?: string;
 };
 
 /**
@@ -27,6 +30,7 @@ export async function CallsFilters({
   centres: CentreRow[];
 }) {
   const t = await getTranslations("calls.filters");
+  const outcomes = await getTranslations("outcomes");
 
   return (
     <form method="get" className="flex flex-wrap items-end gap-3">
@@ -47,10 +51,18 @@ export async function CallsFilters({
         <input
           type="text"
           name="outcome"
+          list="call-outcomes"
           defaultValue={values.outcome ?? ""}
           placeholder={t("outcomePlaceholder")}
           className={inputClass}
         />
+        <datalist id="call-outcomes">
+          {KNOWN_OUTCOMES.map((outcome) => (
+            <option key={outcome} value={outcome}>
+              {outcomes.has(outcome) ? outcomes(outcome) : outcome}
+            </option>
+          ))}
+        </datalist>
       </Field>
       {centres.length > 0 ? (
         <Field label={t("centre")} className="w-48">
@@ -73,6 +85,10 @@ export async function CallsFilters({
           className={inputClass}
         />
       </Field>
+      <label className="flex items-center gap-2 pb-2.5 text-small text-muted">
+        <input type="checkbox" name="test" value="1" defaultChecked={values.test === "1"} className="h-4 w-4" />
+        {t("includeTest")}
+      </label>
       <div className="flex items-center gap-2 pb-px">
         <Button type="submit" variant="primary" size="md">
           {t("apply")}

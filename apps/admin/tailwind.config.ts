@@ -36,6 +36,11 @@ const config: Config = {
           think: "#1c5cab",
           voice: "#0d366b",
         },
+        // The two series of the Overview's by-hour chart: indigo ink for
+        // inbound, ochre for outbound. Validated together for colour-blind
+        // separation on the white card; neither is a status colour, so a
+        // bar can never read as a warning.
+        series: { inbound: "#4A47B0", outbound: "#A8742E" },
       },
       fontFamily: {
         sans: ["var(--font-sans)", "var(--font-devanagari)", "system-ui", "sans-serif"],

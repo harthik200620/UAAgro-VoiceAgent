@@ -13,12 +13,15 @@
   },
   "dependencies": {
     "clsx": "^2.1.1",
+    "leaflet": "^1.9.4",
     "next": "^15.1.0",
     "next-intl": "^3.26.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-leaflet": "^5.0.0"
   },
   "devDependencies": {
+    "@types/leaflet": "^1.9.22",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

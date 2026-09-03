@@ -8,6 +8,7 @@ import { Forbidden } from "@/components/ui/forbidden";
 import { PageHeader } from "@/components/ui/page-header";
 import { can } from "@/lib/rbac";
 import { getCalls, getCentres, type CallsQuery } from "@/server/api";
+import { optional } from "@/server/load";
 import { currentSession } from "@/server/session";
 
 export const dynamic = "force-dynamic";
@@ -18,8 +19,10 @@ const PAGE_SIZE = 50;
  * Calls -- every call, filtered from the URL.
  *
  * The filters are read from the query string rather than held in state, so
- * a filtered view is a link. The centre list only loads for a session that
- * may see centres; the API scopes the calls themselves either way.
+ * a filtered view is a link. Test calls placed from the browser page are
+ * left out unless asked for: they are how the platform is checked, not how
+ * farmers are served. The centre list only loads for a session that may see
+ * centres; the API scopes the calls themselves either way.
  */
 export default async function CallsPage({
   searchParams,
@@ -50,17 +53,19 @@ export default async function CallsPage({
   if (outcome) values.outcome = query.outcome = outcome;
   if (centre) values.centre = query.centreId = centre;
   if (q) values.q = query.q = q;
+  if (one("test") === "1") values.test = "1";
+  else query.isTest = false;
 
   const [calls, centres] = await Promise.all([
     getCalls(session, query),
-    can(session, "centres.view") ? getCentres(session) : Promise.resolve([]),
+    can(session, "centres.view") ? optional(getCentres(session)) : Promise.resolve(null),
   ]);
 
   return (
     <>
       <PageHeader title={t("title")} subtitle={t("subtitle")} />
       <Card className="px-5 py-4">
-        <CallsFilters values={values} centres={centres} />
+        <CallsFilters values={values} centres={centres ?? []} />
       </Card>
       <Card className="px-2 pb-1.5 pt-4">
         <div className="flex items-baseline justify-between px-3.5 pb-2">

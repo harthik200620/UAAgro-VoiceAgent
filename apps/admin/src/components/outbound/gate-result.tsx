@@ -17,14 +17,22 @@ import { humanize, messageKey } from "@/lib/tones";
  * removed anyone is named, and a blocked campaign is shown as blocked rather
  * than as one with fewer numbers.
  */
-export function GateResult({ result }: { result: CampaignImport }) {
+export function GateResult({
+  result,
+  blockedBy,
+}: {
+  result: CampaignImport;
+  /** What stops it, when the caller knows better than the campaign row (a quick dial's own answer). */
+  blockedBy?: string[];
+}) {
   const t = useTranslations("newCampaign.gate");
   const checks = useTranslations("checks");
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   const { campaign } = result;
-  const blocked = campaign.blockedBy.length > 0;
+  const reasons = blockedBy ?? campaign.blockedBy;
+  const blocked = reasons.length > 0;
   const checkLabel = (check: string) => {
     const key = messageKey(check);
     return checks.has(key) ? checks(key) : humanize(check);
@@ -73,7 +81,7 @@ export function GateResult({ result }: { result: CampaignImport }) {
         <div role="alert" className="rounded-panel border border-red bg-red-bg px-3.5 py-3 text-ui text-red-text">
           <div className="font-semibold">{t("blocked")}</div>
           <ul className="mt-1 list-inside list-disc">
-            {campaign.blockedBy.map((check) => (
+            {reasons.map((check) => (
               <li key={check}>{checkLabel(check)}</li>
             ))}
           </ul>

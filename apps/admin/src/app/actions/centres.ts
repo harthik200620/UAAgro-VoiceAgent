@@ -24,12 +24,20 @@ import { guard } from "@/server/guard";
  * the last bag leaves.
  */
 
-const CENTRES_PAGE = "/[locale]/(panel)/inbound/centres";
+const CENTRES_PAGE = "/[locale]/(panel)/centres";
 
 export type AddCentreState =
   | { status: "idle" }
   | { status: "error"; message: string }
   | { status: "added"; code: string };
+
+/** "seeds, fertiliser, soil testing" -> ["seeds", "fertiliser", "soil testing"]. */
+function servicesFrom(text: string): string[] {
+  return text
+    .split(/[,;\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
 export async function addCentre(_previous: AddCentreState, formData: FormData): Promise<AddCentreState> {
   const t = await getTranslations("actions");
@@ -47,11 +55,24 @@ export async function addCentre(_previous: AddCentreState, formData: FormData): 
   if (!input.name || !input.district || !input.openTime || !input.closeTime) {
     return { status: "error", message: t("centreIncomplete") };
   }
-  for (const key of ["nameHi", "block", "state", "pincode", "managerName", "managerNumber", "phone"] as const) {
+  for (const key of [
+    "nameHi",
+    "block",
+    "state",
+    "pincode",
+    "managerName",
+    "managerNumber",
+    "phone",
+    "addressSpoken",
+  ] as const) {
     const value = text(key);
     if (value) input[key] = value;
   }
-  // "27.87, 81.50" -- typed, because there is no map here to pick from.
+  const services = servicesFrom(text("services"));
+  if (services.length > 0) input.services = services;
+  if (formData.get("isPrimary") === "on") input.isPrimary = true;
+
+  // "27.87, 81.50" -- typed, or picked on the map and copied into the field.
   const location = text("location");
   if (location) {
     const [latitude, longitude] = location.split(/[,\s]+/).map(Number);
@@ -71,6 +92,7 @@ export async function addCentre(_previous: AddCentreState, formData: FormData): 
   }
 }
 
+/** Any subset of a centre, `isPrimary: true` included: the API clears the previous primary itself. */
 export async function saveCentre(centreId: string, patch: CentrePatch): Promise<ActionResult<CentreRow>> {
   const t = await getTranslations("actions");
   const guarded = await guard("centres.edit");

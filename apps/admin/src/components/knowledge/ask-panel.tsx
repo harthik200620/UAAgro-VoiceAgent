@@ -7,25 +7,31 @@ import { askQuestion } from "@/app/actions/knowledge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icon";
+import { Segmented } from "@/components/ui/segmented";
 import type { KnowledgeAnswer } from "@/lib/contract";
 import { formatMs } from "@/lib/format";
 
+type Direction = "inbound" | "outbound";
+
 /**
- * "Try a question": what the agent would find, and -- on the second button
- * only, because it is a model call -- what it would say. The retrieval
- * numbers are shown because they are the number the phone farmer waits for.
+ * "Try a question": what the agent would find, and -- when asked to answer
+ * like the phone would, because that is a model call -- what it would say.
+ * The retrieval numbers are shown because they are the number the farmer
+ * waits for.
  *
  * Asked as one kind of call or the other, because a document can be marked
  * for one of them: the operator is shown what *that* call would find.
  */
-export function AskPanel({ direction }: { direction: "inbound" | "outbound" }) {
+export function AskPanel() {
   const t = useTranslations("knowledge.ask");
   const [question, setQuestion] = useState("");
+  const [direction, setDirection] = useState<Direction>("inbound");
+  const [answer, setAnswer] = useState(false);
   const [result, setResult] = useState<KnowledgeAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  const ask = (answer: boolean) =>
+  const ask = () =>
     startTransition(async () => {
       setError(null);
       const outcome = await askQuestion(question, answer, direction);
@@ -34,12 +40,12 @@ export function AskPanel({ direction }: { direction: "inbound" | "outbound" }) {
     });
 
   return (
-    <Card className="flex w-[380px] shrink-0 flex-col gap-3.5 px-5 pb-5 pt-4.5">
+    <Card className="flex flex-col gap-3.5 px-5 pb-5 pt-4.5">
       <div className="font-semibold">{t("title")}</div>
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          ask(false);
+          ask();
         }}
         className="flex flex-col gap-2.5"
       >
@@ -54,12 +60,31 @@ export function AskPanel({ direction }: { direction: "inbound" | "outbound" }) {
             className="min-w-0 flex-1 bg-transparent text-name outline-none placeholder:text-faint"
           />
         </label>
-        <div className="flex flex-wrap gap-2">
-          <Button type="submit" variant="primary" icon="search" disabled={pending || !question.trim()}>
-            {t("search")}
-          </Button>
-          <Button type="button" icon="mic" disabled={pending || !question.trim()} onClick={() => ask(true)}>
-            {t("alsoAnswer")}
+        <div className="flex flex-wrap items-center gap-3">
+          <Segmented<Direction>
+            label={t("asCall")}
+            options={[
+              { value: "inbound", label: t("helpline") },
+              { value: "outbound", label: t("campaignCall") },
+            ]}
+            value={direction}
+            onChange={setDirection}
+            disabled={pending}
+          />
+          <label className="flex items-center gap-2 text-small text-muted">
+            <input
+              type="checkbox"
+              checked={answer}
+              onChange={(event) => setAnswer(event.target.checked)}
+              disabled={pending}
+              className="h-4 w-4"
+            />
+            {t("likeThePhone")}
+          </label>
+        </div>
+        <div>
+          <Button type="submit" variant="primary" icon={answer ? "mic" : "search"} disabled={pending || !question.trim()}>
+            {pending ? t("asking") : answer ? t("askAndAnswer") : t("search")}
           </Button>
         </div>
       </form>

@@ -10,12 +10,14 @@ import type {
   CampaignControl,
   CampaignImport,
   CampaignSummary,
+  DialResult,
   ExtractedContacts,
 } from "@/lib/contract";
 import { can } from "@/lib/rbac";
 import {
   approveCampaign,
   createCampaign,
+  dialNumbers,
   failure,
   pauseCampaign,
   readContactFile,
@@ -29,7 +31,8 @@ import {
 import { guard } from "@/server/guard";
 
 /**
- * Outbound campaigns: creating one from a pasted list, and driving it.
+ * Outbound campaigns: creating one from a pasted list, calling a list right
+ * now, and driving a campaign that exists.
  *
  * Every capability is re-checked here rather than trusted from the UI: a
  * Server Action is a public endpoint, and hiding a button stops nobody who
@@ -37,6 +40,7 @@ import { guard } from "@/server/guard";
  * request cannot start a campaign twice.
  */
 
+const OUTBOUND_PAGE = "/[locale]/(panel)/outbound";
 const CAMPAIGN_PAGE = "/[locale]/(panel)/outbound/[id]";
 
 export type CreateCampaignState =
@@ -81,12 +85,65 @@ export async function createCampaignAction(
       },
       randomUUID(),
     );
-    revalidatePath("/[locale]/(panel)/outbound", "page");
+    revalidatePath(OUTBOUND_PAGE, "page");
     return { status: "created", result };
   } catch (error) {
     const reason = failure(error, t("campaignFailed"));
     return { status: "error", message: reason.message, code: reason.code };
   }
+}
+
+export type DialState =
+  | { status: "idle" }
+  | { status: "error"; message: string; code: string | null }
+  /** The campaign exists but did not start: the gate or the four-eyes rule stopped it. */
+  | { status: "waiting"; result: DialResult };
+
+/**
+ * "Call now": the pasted numbers become a campaign that is gated, approved
+ * and started in one step. When it started, the operator lands on its board
+ * and watches the cards turn; when it did not, the reasons are shown where
+ * the numbers were typed.
+ */
+export async function dialNowAction(_previous: DialState, formData: FormData): Promise<DialState> {
+  const t = await getTranslations("actions");
+  const guarded = await guard("campaigns.dial");
+  if (!guarded.ok) return { status: "error", message: guarded.message, code: guarded.code };
+  const { session } = guarded;
+
+  const numbers = String(formData.get("numbers") ?? "");
+  const flowId = String(formData.get("flowId") ?? "").trim();
+  const name = String(formData.get("name") ?? "").trim();
+  const consentNote = String(formData.get("consentNote") ?? "").trim();
+
+  if (numbers.trim() === "") {
+    return { status: "error", message: t("numbersRequired"), code: "validation_error" };
+  }
+  if (formData.get("consentAttested") !== "on") {
+    return { status: "error", message: t("consentRequired"), code: "consent_required" };
+  }
+
+  let result: DialResult;
+  try {
+    result = await dialNumbers(
+      session,
+      {
+        numbers,
+        consentAttested: true,
+        ...(flowId ? { flowId } : {}),
+        ...(name ? { name } : {}),
+        ...(consentNote ? { consentNote } : {}),
+      },
+      randomUUID(),
+    );
+  } catch (error) {
+    const reason = failure(error, t("dialFailed"));
+    return { status: "error", message: reason.message, code: reason.code };
+  }
+
+  revalidatePath(OUTBOUND_PAGE, "page");
+  if (!result.started) return { status: "waiting", result };
+  redirect(`/${await getLocale()}/outbound/${encodeURIComponent(result.campaign.id)}`);
 }
 
 /** Approve, then start. Returns only on failure: success navigates to the campaign. */

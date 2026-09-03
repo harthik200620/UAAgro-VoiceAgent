@@ -17,6 +17,11 @@ const A_YEAR = 60 * 60 * 24 * 365;
  * redirecting afterwards leaves no room for that -- the browser follows the
  * redirect with the new cookie attached.
  *
+ * The redirect is a path, not an absolute URL: the browser resolves it
+ * against the origin it used, so a session opened on 127.0.0.1 is not sent
+ * to `localhost` -- a different origin, where its cookies are not -- and
+ * nothing from the request's headers is trusted to name a host.
+ *
  * Nothing here is authenticated: the language of the chrome is not a
  * permission, and every page still checks the session for itself.
  */
@@ -24,14 +29,11 @@ export async function POST(request: Request): Promise<Response> {
   const form = await request.formData().catch(() => null);
   const asked = form?.get("locale");
   const locale = typeof asked === "string" ? asked : null;
-  if (!isPanelLocale(locale)) {
-    return NextResponse.redirect(new URL("/", request.url), 303);
-  }
+  // 303, so the browser follows a POST with a GET rather than posting again.
+  if (!isPanelLocale(locale)) return seeOther("/");
 
   const next = form?.get("next");
-  const destination = returnPath(typeof next === "string" ? next : null, locale);
-  // 303, so the browser follows a POST with a GET rather than posting again.
-  const response = NextResponse.redirect(new URL(destination, request.url), 303);
+  const response = seeOther(returnPath(typeof next === "string" ? next : null, locale));
   response.cookies.set(LOCALE_COOKIE, locale, {
     path: "/",
     maxAge: A_YEAR,
@@ -41,4 +43,8 @@ export async function POST(request: Request): Promise<Response> {
     httpOnly: false,
   });
   return response;
+}
+
+function seeOther(path: string): NextResponse {
+  return new NextResponse(null, { status: 303, headers: { location: path } });
 }

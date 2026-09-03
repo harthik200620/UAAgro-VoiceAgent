@@ -1,5 +1,6 @@
 /**
- * Read models of the control-plane contract (docs/ADMIN_API.md).
+ * Read models of the control-plane contract (docs/ADMIN_API.md), including
+ * the additions of 3 September 2026.
  *
  * Types only, and in `lib` rather than `server` on purpose: Client Components
  * render these shapes as plain props, and the boundary test refuses any import
@@ -88,6 +89,104 @@ export type LiveSnapshot = {
   recent: RecentCall[];
 };
 
+/* Overview */
+
+export type OverviewRange = "today" | "7d" | "30d";
+
+export type AttentionKind =
+  | "ticket"
+  | "transfer_failed"
+  | "unanswered"
+  | "stock_out"
+  | "knowledge_pending"
+  | "knowledge_failed"
+  | "campaign_blocked"
+  | "telephony"
+  | "llm"
+  | "worker";
+
+export type AttentionSeverity = "high" | "medium" | "low";
+
+export type AttentionItem = {
+  kind: AttentionKind;
+  severity: AttentionSeverity;
+  /** English; the panel translates by `kind`. */
+  title: string;
+  detail: string | null;
+  /** A panel route to act on it, e.g. "/calls/<id>". */
+  href: string | null;
+  at: string | null;
+  count: number;
+};
+
+/** A finished call on the Overview: the live snapshot's row plus the summary and the test flag. */
+export type OverviewRecentCall = RecentCall & { isTest: boolean; summaryHi: string | null };
+
+export type ByHourRow = { hour: string; inbound: number; outbound: number };
+
+export type TopQuestion = { intent: string; label: string; count: number };
+
+export type Overview = {
+  range: OverviewRange;
+  from: string;
+  to: string;
+  generatedAt: string;
+  live: { calls: number; capacity: number };
+  calls: {
+    total: number;
+    inbound: number;
+    outbound: number;
+    /** Ended without a transfer. */
+    answeredByAgent: number;
+    transferred: number;
+    /** Ended with an error or with no reply from the agent. */
+    missed: number;
+    /** Placed from the browser page; counted separately, never in the others. */
+    testCalls: number;
+  };
+  /** CallOutcome values, largest first. */
+  outcomes: { key: string; label: string; count: number }[];
+  speed: {
+    firstReplyP50Ms: number | null;
+    firstReplyP95Ms: number | null;
+    /** Every agent reply in range. */
+    replyP50Ms: number | null;
+    /** Replies under 1,200 ms, 0-100. */
+    withinBudgetPct: number | null;
+  };
+  outbound: {
+    campaignsRunning: number;
+    contactsDialled: number;
+    reached: number;
+    pressed1: number;
+    pressed2: number;
+    optedOut: number;
+  };
+  /** What needs a person, most urgent first, at most 12. */
+  attention: AttentionItem[];
+  /** Newest first, at most 10. */
+  recent: OverviewRecentCall[];
+  /** 24 rows for today, one per day for 7d/30d; hours in Asia/Kolkata. */
+  byHour: ByHourRow[];
+  /** At most 8. */
+  topQuestions: TopQuestion[];
+};
+
+export type TelephonyStatus = {
+  provider: "exotel" | "twilio" | "plivo" | "simulator";
+  /** Simulator: calls are answered from the browser page, nothing is dialled. */
+  mode: "live" | "simulator";
+  configured: boolean;
+  /** The DID, masked to the last four digits. */
+  inboundNumber: string | null;
+  /** What to set when not configured. */
+  remedy: string | null;
+  /** The worker's /dev/call page, development only. */
+  browserCallUrl: string | null;
+};
+
+/* Calls */
+
 export type CallRow = {
   id: string;
   callRef: string;
@@ -107,6 +206,10 @@ export type CallRow = {
   firstReplyMs: number | null;
   dtmf: string | null;
   campaignId: string | null;
+  isTest: boolean;
+  summaryHi: string | null;
+  intents: string[];
+  recordingAvailable: boolean;
 };
 
 export type CallEvent = { at: number; type: string; text: string };
@@ -116,6 +219,15 @@ export type Recording = {
   durationSeconds: number | null;
   bytes: number | null;
   retainedUntil: string | null;
+};
+
+export type CallStats = {
+  turns: number;
+  farmerTurns: number;
+  agentTurns: number;
+  cachedReplies: number;
+  toolCalls: number;
+  llmModel: string | null;
 };
 
 export type CallDetail = {
@@ -143,7 +255,12 @@ export type CallDetail = {
   turns: TurnEvent[];
   events: CallEvent[];
   followUps: string[];
+  isTest: boolean;
+  intents: string[];
+  stats: CallStats;
 };
+
+/* Outbound */
 
 export type CampaignStatus =
   | "draft"
@@ -190,7 +307,7 @@ export type CampaignSummary = {
   blockedBy: string[];
 };
 
-export type ContactStatus = "waiting" | "in_call" | "done" | "no_answer" | "removed";
+export type ContactStatus = "waiting" | "ringing" | "in_call" | "done" | "no_answer" | "removed";
 
 export type ContactOutcome =
   | "pressed_1"
@@ -213,6 +330,8 @@ export type Contact = {
   attempts: number;
   lastAttemptAt: string | null;
   removedReason: string | null;
+  /** In simulator mode, the worker's browser page that answers this call; null otherwise. */
+  answerUrl: string | null;
 };
 
 export type CampaignDetail = CampaignSummary & { contacts: Contact[] };
@@ -247,6 +366,23 @@ export type CampaignInput = {
   consentAttested: true;
   consentNote?: string;
 };
+
+/** "Call now": a campaign created, gated, approved and started in one step. */
+export type DialInput = {
+  numbers: string;
+  flowId?: string;
+  name?: string;
+  consentAttested: true;
+  consentNote?: string;
+};
+
+export type DialResult = CampaignImport & {
+  /** False when the gate blocked it or it waits for a second approver. */
+  started: boolean;
+  blockedBy: string[];
+};
+
+/* Flows */
 
 export type FlowType = "inbound" | "outbound";
 
@@ -288,8 +424,11 @@ export type FlowScript = OutboundScript | InboundScript;
 
 export type FlowDetail = FlowVersion & {
   script: FlowScript;
-  /** Shown read-only to ops_manager and above; never sent to a client bundle. */
+  /** The inbound persona. Editable for inbound flows; read-only elsewhere. */
   systemPrompt: string;
+  promptWordCount: number;
+  /** The seed wording, so an operator can restore it. */
+  defaults: { systemPrompt: string; greeting: string; closing: string };
 };
 
 export type FlowPreview = {
@@ -299,7 +438,12 @@ export type FlowPreview = {
   substitutions: { from: string; to: string }[];
 };
 
+/* Knowledge */
+
 export type IngestStatus = "pending" | "indexing" | "indexed" | "failed";
+
+/** "both" is the default: crop and product material belongs on either call. */
+export type KnowledgeScope = "inbound" | "outbound" | "both";
 
 export type KbDocumentRow = {
   id: string;
@@ -319,10 +463,21 @@ export type KbDocumentRow = {
   /** Which calls may quote it. Retrieval enforces this, not just the panel. */
   scope: KnowledgeScope;
   updatedAt: string;
+  sizeBytes: number | null;
+  indexedAt: string | null;
+  wordCount: number | null;
 };
 
-/** "both" is the default: crop and product material belongs on either call. */
-export type KnowledgeScope = "inbound" | "outbound" | "both";
+export type KnowledgeStatus = {
+  /** The background worker's heartbeat, refreshed every 60 s. */
+  worker: { alive: boolean; lastSeenAt: string | null };
+  documents: { pending: number; indexing: number; indexed: number; failed: number };
+  chunks: number;
+  embedded: number;
+  embeddingModel: string;
+  /** The last measured search latency. */
+  retrievalMs: number | null;
+};
 
 export type KnowledgeAnswer = {
   passages: { documentTitle: string; section: string | null; snippet: string; score: number }[];
@@ -330,6 +485,8 @@ export type KnowledgeAnswer = {
   degraded: boolean;
   answer: null | { text: string; totalMs: number; note: string | null };
 };
+
+/* Centres */
 
 export type StockRow = {
   inventoryId: string;
@@ -364,6 +521,11 @@ export type CentreRow = {
   openNow: boolean;
   /** The first six items; the full list comes from /stock. */
   stock: StockRow[];
+  /** The head office: the helpline answers stock and price for it when the caller's centre is unknown. */
+  isPrimary: boolean;
+  addressSpoken: string | null;
+  services: string[];
+  stockOuts: number;
 };
 
 export type CentreInput = {
@@ -381,6 +543,9 @@ export type CentreInput = {
   openTime: string;
   closeTime: string;
   workingDays?: string[];
+  isPrimary?: boolean;
+  addressSpoken?: string;
+  services?: string[];
 };
 
 export type CentrePatch = Partial<CentreInput> & { isActive?: boolean };
@@ -392,6 +557,8 @@ export type TransferRules = {
   ringTimeoutSeconds: number;
   whisperSeconds: number;
 };
+
+/* Data */
 
 export type StorageReport = {
   countedAt: string;
@@ -438,4 +605,83 @@ export type ConnectionTest = {
   latencyMs: number | null;
   serverVersion: string | null;
   error: string | null;
+};
+
+/* Data sources: the client's MySQL database */
+
+export type SourceTable = "stores" | "products" | "stock";
+
+/** Their table, and our field → their column. */
+export type TableMap = { table: string; columns: Record<string, string> };
+
+export type SourceMapping = Record<SourceTable, TableMap | null>;
+
+export type SyncRun = {
+  id: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: "running" | "ok" | "failed";
+  /** Rows written. */
+  stores: number;
+  products: number;
+  stock: number;
+  error: string | null;
+};
+
+export type SourceSchedule = "manual" | "hourly" | "daily";
+
+export type DataSource = {
+  id: string;
+  name: string;
+  kind: "mysql";
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  tls: boolean;
+  /** The password itself is never returned. */
+  hasPassword: boolean;
+  mapping: SourceMapping;
+  schedule: SourceSchedule;
+  lastRun: SyncRun | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DataSourceInput = {
+  name: string;
+  host: string;
+  port?: number;
+  database: string;
+  user: string;
+  password: string;
+  tls?: boolean;
+  mapping?: SourceMapping;
+  schedule?: SourceSchedule;
+};
+
+/** Any subset; `password` replaces the stored one. */
+export type DataSourcePatch = Partial<DataSourceInput>;
+
+export type SourceConnectionInput = {
+  host: string;
+  port?: number;
+  database: string;
+  user: string;
+  password: string;
+  tls?: boolean;
+};
+
+export type ConnectionReport = {
+  ok: boolean;
+  latencyMs: number | null;
+  serverVersion: string | null;
+  tables: { name: string; rows: number | null }[];
+  error: string | null;
+};
+
+/** One of their tables: its columns, and the first five rows for the mapping screen. */
+export type TableColumns = {
+  columns: { name: string; type: string }[];
+  sample: Record<string, unknown>[];
 };

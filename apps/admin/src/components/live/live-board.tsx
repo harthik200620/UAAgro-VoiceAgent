@@ -9,14 +9,16 @@ import { languageName } from "@/components/status/language-name";
 import { OutcomeChip } from "@/components/status/outcome-chip";
 import { Transcript, type TranscriptItem } from "@/components/transcript/transcript";
 import { Unavailable } from "@/components/ui/unavailable";
-import { ButtonLink } from "@/components/ui/button";
+import { ButtonLink, buttonClass } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Chip } from "@/components/ui/chip";
+import { Icon } from "@/components/ui/icon";
 import { PageHeader } from "@/components/ui/page-header";
+import { StatCard } from "@/components/ui/stat-card";
 import { useEventStream } from "@/hooks/use-event-stream";
 import { useNow } from "@/hooks/use-now";
 import { Link } from "@/i18n/routing";
-import type { LiveSnapshot } from "@/lib/contract";
+import type { LiveSnapshot, TelephonyStatus } from "@/lib/contract";
 import { formatCount, formatLongDate, formatMs, formatTime } from "@/lib/format";
 import {
   applyLiveEvent,
@@ -29,7 +31,6 @@ import {
 
 import { CallCard } from "./call-card";
 import { FinishedTable } from "./finished-table";
-import { StatCard } from "./stat-card";
 
 /**
  * The Live screen after the server has drawn it: the snapshot becomes state,
@@ -42,10 +43,13 @@ import { StatCard } from "./stat-card";
  */
 export function LiveBoard({
   snapshot,
+  telephony,
   canIntervene,
   renderedAt,
 }: {
   snapshot: LiveSnapshot;
+  /** Null when the control plane does not report it; the board only loses the test-page link. */
+  telephony: TelephonyStatus | null;
   canIntervene: boolean;
   /** The server's clock at render, so the first client frame matches the HTML. */
   renderedAt: string;
@@ -105,6 +109,7 @@ export function LiveBoard({
         subtitle={`${formatLongDate(now)} · ${formatTime(now)} · ${t("subtitle")}`}
       >
         {stream !== "live" ? <Chip tone="grey">{t(`stream.${stream}`)}</Chip> : null}
+        {telephony ? <TelephonyChips status={telephony} /> : null}
         <Chip tone="amber" size="lg" pulse={state.calls.length > 0}>
           <span aria-live="polite">{t("inProgress", { count: state.calls.length })}</span>
           <span className="font-normal opacity-80">· {t("ofCapacity", { capacity: state.capacity })}</span>
@@ -240,6 +245,38 @@ export function LiveBoard({
         </div>
         <FinishedTable rows={state.recent} />
       </Card>
+    </>
+  );
+}
+
+/**
+ * How calls reach the panel right now: the simulator (answered from a browser
+ * page, nothing dialled), a line that is not configured yet, and -- in
+ * development -- the worker's test page, opened in its own tab.
+ */
+function TelephonyChips({ status }: { status: TelephonyStatus }) {
+  const t = useTranslations("live.telephony");
+  return (
+    <>
+      {status.mode === "simulator" ? <Chip tone="grey">{t("simulator")}</Chip> : null}
+      {!status.configured ? (
+        <Chip tone="amber" className="max-w-[320px]">
+          <span className="truncate" title={status.remedy ?? undefined}>
+            {t("notConfigured")}
+          </span>
+        </Chip>
+      ) : null}
+      {status.browserCallUrl ? (
+        <a
+          href={status.browserCallUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={buttonClass("secondary", "md")}
+        >
+          <Icon name="external" />
+          <span>{t("testPage")}</span>
+        </a>
+      ) : null}
     </>
   );
 }

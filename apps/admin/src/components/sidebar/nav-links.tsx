@@ -7,10 +7,12 @@ import { Link, usePathname } from "@/i18n/routing";
 import type { NavKey } from "@/lib/nav";
 
 const ICONS: Record<NavKey, IconName> = {
+  overview: "overview",
   live: "live",
   calls: "phone",
   outbound: "outbound",
-  inbound: "inbound",
+  knowledge: "book",
+  centres: "pin",
   flows: "flows",
   data: "data",
 };

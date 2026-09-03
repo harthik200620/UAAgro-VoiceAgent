@@ -11,9 +11,15 @@ import type {
   CentreInput,
   CentrePatch,
   CentreRow,
-  ExtractedContacts,
   ConnectionInfo,
+  ConnectionReport,
   ConnectionTest,
+  DataSource,
+  DataSourceInput,
+  DataSourcePatch,
+  DialInput,
+  DialResult,
+  ExtractedContacts,
   FlowDetail,
   FlowPreview,
   FlowScript,
@@ -22,10 +28,17 @@ import type {
   KbDocumentRow,
   KnowledgeAnswer,
   KnowledgeScope,
+  KnowledgeStatus,
   LiveSnapshot,
+  Overview,
+  OverviewRange,
   ServiceHealthReport,
+  SourceConnectionInput,
   StockRow,
   StorageReport,
+  SyncRun,
+  TableColumns,
+  TelephonyStatus,
   TransferRules,
 } from "@/lib/contract";
 import type { Session } from "@/lib/rbac";
@@ -153,6 +166,14 @@ function query(params: Record<string, string | number | undefined>): string {
 
 const id = encodeURIComponent;
 
+/* Overview */
+
+export const getOverview = (session: Session, range: OverviewRange) =>
+  apiFetch<Overview>(`/admin/overview${query({ range })}`, { session });
+
+export const getTelephony = (session: Session) =>
+  apiFetch<TelephonyStatus>("/admin/telephony", { session });
+
 /* Live */
 
 export const getLiveSnapshot = (session: Session) =>
@@ -168,6 +189,8 @@ export type CallsQuery = {
   from?: string;
   to?: string;
   q?: string;
+  /** Omitted: both kinds. */
+  isTest?: boolean;
   limit: number;
   offset: number;
 };
@@ -182,6 +205,7 @@ export const getCalls = (session: Session, filters: CallsQuery) =>
       from: filters.from,
       to: filters.to,
       q: filters.q,
+      is_test: filters.isTest === undefined ? undefined : String(filters.isTest),
       limit: filters.limit,
       offset: filters.offset,
     })}`,
@@ -190,6 +214,14 @@ export const getCalls = (session: Session, filters: CallsQuery) =>
 
 export const getCall = (session: Session, callId: string) =>
   apiFetch<CallDetail>(`/admin/calls/${id(callId)}`, { session });
+
+/** Re-runs the post-call summary: a model call, so only on an explicit click. */
+export const summariseCall = (session: Session, callId: string, key: string) =>
+  apiFetch<CallDetail>(`/admin/calls/${id(callId)}/summarise`, {
+    session,
+    method: "POST",
+    idempotencyKey: key,
+  });
 
 /* Outbound */
 
@@ -214,6 +246,15 @@ export const readContactFile = (session: Session, form: FormData) =>
 
 export const createCampaign = (session: Session, input: CampaignInput, key: string) =>
   apiFetch<CampaignImport>("/admin/campaigns", {
+    session,
+    method: "POST",
+    body: input,
+    idempotencyKey: key,
+  });
+
+/** Create, gate, approve and start in one step; `started` says whether it did. */
+export const dialNumbers = (session: Session, input: DialInput, key: string) =>
+  apiFetch<DialResult>("/admin/dial", {
     session,
     method: "POST",
     body: input,
@@ -254,13 +295,11 @@ export const getFlows = (session: Session, flowType?: FlowType) =>
 export const getFlow = (session: Session, flowId: string) =>
   apiFetch<FlowDetail>(`/admin/flows/${id(flowId)}`, { session });
 
+/** What an edit carries: the words, and for an inbound flow the persona behind them. */
+export type FlowEdit = { name?: string; script: FlowScript; changelog?: string; systemPrompt?: string };
+
 /** A new draft cloned from `flowId` with the edits applied; published versions are immutable. */
-export const createFlowVersion = (
-  session: Session,
-  flowId: string,
-  body: { name?: string; script: FlowScript; changelog?: string },
-  key: string,
-) =>
+export const createFlowVersion = (session: Session, flowId: string, body: FlowEdit, key: string) =>
   apiFetch<FlowDetail>(`/admin/flows/${id(flowId)}/versions`, {
     session,
     method: "POST",
@@ -269,11 +308,7 @@ export const createFlowVersion = (
   });
 
 /** Drafts only; the API answers 409 for a published version. */
-export const updateFlow = (
-  session: Session,
-  flowId: string,
-  patch: { name?: string; script?: FlowScript; changelog?: string },
-) =>
+export const updateFlow = (session: Session, flowId: string, patch: Partial<FlowEdit>) =>
   apiFetch<FlowDetail>(`/admin/flows/${id(flowId)}`, {
     session,
     method: "PATCH",
@@ -303,12 +338,15 @@ export const testCallFlow = (session: Session, flowId: string, phone: string, ke
     idempotencyKey: key,
   });
 
-/* Inbound: knowledge base */
+/* Knowledge base */
 
 export const getKbDocuments = (session: Session) =>
   apiFetch<KbDocumentRow[]>("/admin/knowledge/documents", { session });
 
-/** `form` carries `file` plus optional `title` and `language`. */
+export const getKnowledgeStatus = (session: Session) =>
+  apiFetch<KnowledgeStatus>("/admin/knowledge/status", { session });
+
+/** `form` carries `file` plus optional `title`, `language` and `scope`. */
 export const uploadKbDocument = (session: Session, form: FormData, key: string) =>
   apiFetch<KbDocumentRow>("/admin/knowledge/documents", {
     session,
@@ -329,6 +367,19 @@ export const addKbUrl = (
     idempotencyKey: key,
   });
 
+/** A typed note: `docType: "text"`, indexed like any other document. */
+export const addKbNote = (
+  session: Session,
+  body: { text: string; title: string; scope?: KnowledgeScope; language?: string },
+  key: string,
+) =>
+  apiFetch<KbDocumentRow>("/admin/knowledge/documents", {
+    session,
+    method: "POST",
+    body,
+    idempotencyKey: key,
+  });
+
 /** Whether it is live, which calls may use it, or both. */
 export const patchKbDocument = (
   session: Session,
@@ -339,6 +390,13 @@ export const patchKbDocument = (
     session,
     method: "PATCH",
     body: change,
+  });
+
+export const reindexKbDocument = (session: Session, documentId: string, key: string) =>
+  apiFetch<KbDocumentRow>(`/admin/knowledge/documents/${id(documentId)}/reindex`, {
+    session,
+    method: "POST",
+    idempotencyKey: key,
   });
 
 export const deleteKbDocument = (session: Session, documentId: string) =>
@@ -362,7 +420,7 @@ export const askKnowledge = (
     body: { question, answer, direction },
   });
 
-/* Inbound: centres, stock, hand-over */
+/* Centres, stock, hand-over */
 
 export const getCentres = (session: Session) =>
   apiFetch<CentreRow[]>("/admin/centres", { session });
@@ -427,3 +485,57 @@ export const testConnection = (session: Session, dsn: string) =>
     method: "POST",
     body: { dsn },
   });
+
+/* Data sources: the client's MySQL database */
+
+export const getDataSources = (session: Session) =>
+  apiFetch<DataSource[]>("/admin/data/sources", { session });
+
+/** The password is encrypted at rest by the API and never comes back. */
+export const createDataSource = (session: Session, input: DataSourceInput, key: string) =>
+  apiFetch<DataSource>("/admin/data/sources", {
+    session,
+    method: "POST",
+    body: input,
+    idempotencyKey: key,
+  });
+
+export const updateDataSource = (session: Session, sourceId: string, patch: DataSourcePatch) =>
+  apiFetch<DataSource>(`/admin/data/sources/${id(sourceId)}`, {
+    session,
+    method: "PATCH",
+    body: patch,
+  });
+
+export const deleteDataSource = (session: Session, sourceId: string) =>
+  apiFetch<void>(`/admin/data/sources/${id(sourceId)}`, { session, method: "DELETE" });
+
+/** Reaches the database with what the form holds; nothing is stored. */
+export const testSourceConnection = (session: Session, input: SourceConnectionInput) =>
+  apiFetch<ConnectionReport>("/admin/data/sources/test", {
+    session,
+    method: "POST",
+    body: input,
+  });
+
+export const testDataSource = (session: Session, sourceId: string) =>
+  apiFetch<ConnectionReport>(`/admin/data/sources/${id(sourceId)}/test`, {
+    session,
+    method: "POST",
+  });
+
+export const getSourceTableColumns = (session: Session, sourceId: string, table: string) =>
+  apiFetch<TableColumns>(`/admin/data/sources/${id(sourceId)}/tables/${id(table)}/columns`, {
+    session,
+  });
+
+/** 202: the run continues in the background; poll `/runs`. */
+export const syncDataSource = (session: Session, sourceId: string, key: string) =>
+  apiFetch<SyncRun>(`/admin/data/sources/${id(sourceId)}/sync`, {
+    session,
+    method: "POST",
+    idempotencyKey: key,
+  });
+
+export const getSourceRuns = (session: Session, sourceId: string) =>
+  apiFetch<SyncRun[]>(`/admin/data/sources/${id(sourceId)}/runs`, { session });

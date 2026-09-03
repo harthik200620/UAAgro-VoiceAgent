@@ -24,16 +24,7 @@ export type VersionRow = {
  * with an old version's words and opens it -- the old one stays as it was,
  * so history is never rewritten.
  */
-export function VersionsCard({
-  versions,
-  currentId,
-  hrefAfterRestore,
-}: {
-  versions: VersionRow[];
-  currentId: string;
-  /** Where a restored draft opens: its own page on Flows, the same tab on Greeting. */
-  hrefAfterRestore: (id: string) => string;
-}) {
+export function VersionsCard({ versions, currentId }: { versions: VersionRow[]; currentId: string }) {
   const t = useTranslations("flows.versions");
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -44,7 +35,7 @@ export function VersionsCard({
       setError(null);
       const result = await restoreVersion(id);
       if (result.ok) {
-        router.push(hrefAfterRestore(result.value.id));
+        router.push(`/flows/${result.value.id}`);
         router.refresh();
       } else setError(result.message);
     });

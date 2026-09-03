@@ -101,7 +101,7 @@ describe("the server-only boundary", () => {
     // a handler that quietly stopped using the proxy could not join it.
     const REACHES_NOTHING = new Set(["app/api/locale/route.ts"]);
     const handlers = FILES.filter((file) => /^app\/api\/.*\/route\.ts$/.test(file.path));
-    expect(handlers.length).toBe(6);
+    expect(handlers.length).toBe(7);
     for (const file of handlers) {
       expect(file.source, `${file.path} builds its own fetch`).not.toMatch(/\bfetch\(/);
       if (REACHES_NOTHING.has(file.path)) {
@@ -119,6 +119,12 @@ describe("the server-only boundary", () => {
     // Prompts, flows and catalogue logic never reach a client bundle. A prompt
     // in the browser is a prompt a competitor can read and a caller can learn
     // to steer.
+    //
+    // One exception, by design since the contract of 3 September 2026: the
+    // helpline's persona is edited in the panel by an ops manager, so the
+    // Flows page hands it to the prompt editor as a prop of that render and
+    // nothing else. No client module names the field, so an import of the
+    // detail type into a browser bundle still fails here.
     for (const file of FILES) {
       if (!isClient(file.source)) continue;
       for (const forbidden of [

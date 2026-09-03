@@ -30,6 +30,7 @@ export type Capability =
   | "calls.intervene"
   | "campaigns.view"
   | "campaigns.create"
+  | "campaigns.dial"
   | "campaigns.approve"
   | "campaigns.control"
   | "flows.edit"
@@ -42,7 +43,7 @@ export type Capability =
   | "inventory.edit"
   | "data.view"
   | "data.connection"
-  | "users.manage";
+  | "data.sources";
 
 const EVERYTHING: readonly Capability[] = [
   "calls.view",
@@ -50,6 +51,7 @@ const EVERYTHING: readonly Capability[] = [
   "calls.intervene",
   "campaigns.view",
   "campaigns.create",
+  "campaigns.dial",
   "campaigns.approve",
   "campaigns.control",
   "flows.edit",
@@ -62,35 +64,35 @@ const EVERYTHING: readonly Capability[] = [
   "inventory.edit",
   "data.view",
   "data.connection",
-  "users.manage",
+  "data.sources",
 ];
 
-/** What a signed-in user may look at without being able to change anything. */
-const VIEW_ONLY: readonly Capability[] = ["calls.view", "campaigns.view", "centres.view"];
+/** The super_admin's alone: the database connection and the client's database sources. */
+const ADMIN_ONLY: readonly Capability[] = ["data.connection", "data.sources"];
 
 /**
- * Who may do what.
+ * Who may do what, following the contract's ladder (docs/ADMIN_API.md):
+ * Overview, Live, Calls, Centres and Outbound need centre_manager; the
+ * knowledge base opens to an agronomist and changes from ops_manager; Flows
+ * and Data are the ops manager's; sources are written by the super_admin.
  *
- * Explicit grants per role rather than a rank ladder, because the interesting
- * cases break the ladder: a centre manager edits their own stock and nobody's
- * script; an agronomist may try questions against the knowledge base but not
- * upload to it; the database connection is the super_admin's alone, since a
- * DSN is the one secret the panel ever handles.
+ * read_only and auditor hold nothing here on purpose: every panel route
+ * answers them 403, and a link that opens on an error is worse than no link.
  */
 const GRANTS: Record<Role, readonly Capability[]> = {
-  read_only: VIEW_ONLY,
-  auditor: VIEW_ONLY,
-  agronomist: [...VIEW_ONLY, "knowledge.view", "knowledge.ask"],
+  read_only: [],
+  auditor: [],
+  agronomist: ["knowledge.view", "knowledge.ask"],
   centre_manager: [
-    ...VIEW_ONLY,
+    "calls.view",
     "calls.listen",
+    "campaigns.view",
+    "centres.view",
     "inventory.edit",
     "knowledge.view",
     "knowledge.ask",
   ],
-  ops_manager: EVERYTHING.filter(
-    (capability) => capability !== "data.connection" && capability !== "users.manage",
-  ),
+  ops_manager: EVERYTHING.filter((capability) => !ADMIN_ONLY.includes(capability)),
   super_admin: EVERYTHING,
 };
 

@@ -135,8 +135,8 @@ export function CampaignBoard({
         </p>
       ) : null}
 
-      {state.status === "pending_approval" && state.blockedBy.length > 0 ? (
-        // Why there is no Approve button: the gate names what is missing.
+      {state.blockedBy.length > 0 && state.status !== "running" && state.status !== "completed" ? (
+        // Why it is not calling: the gate names what is missing.
         <p className="text-ui text-red-text">
           {t("blockedBy", {
             reasons: state.blockedBy

@@ -7,26 +7,35 @@ import {
   HealthRowsPending,
 } from "@/components/data/also-running-card";
 import { ConnectionCard } from "@/components/data/connection-card";
+import { SourcesPanel } from "@/components/data/sources-panel";
 import { StorageTable } from "@/components/data/storage-table";
 import { Card } from "@/components/ui/card";
 import { Forbidden } from "@/components/ui/forbidden";
+import { NotAvailable } from "@/components/ui/not-available";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatTime } from "@/lib/format";
 import { can } from "@/lib/rbac";
-import { getConnection, getStorage } from "@/server/api";
+import { getConnection, getDataSources, getStorage } from "@/server/api";
+import { load } from "@/server/load";
 import { currentSession } from "@/server/session";
 
 export const dynamic = "force-dynamic";
 
-/** Data -- what the agent and the panel keep, and where. Nothing here is edited by hand. */
+/**
+ * Data -- what the agent and the panel keep, where, and the client's own
+ * database as a source for stores, products and stock. The platform's
+ * tables are read-only here; the MySQL sources are the one thing on the
+ * page that is set up by hand, and only by the super_admin.
+ */
 export default async function DataPage() {
   const session = await currentSession();
   if (!session || !can(session, "data.view")) return <Forbidden />;
 
-  const [t, storage, connection] = await Promise.all([
+  const [t, storage, connection, sources] = await Promise.all([
     getTranslations("data"),
     getStorage(session),
     can(session, "data.connection") ? getConnection(session) : Promise.resolve(null),
+    load(getDataSources(session)),
   ]);
 
   return (
@@ -57,6 +66,20 @@ export default async function DataPage() {
           />
         </div>
       </div>
+
+      <section aria-labelledby="sources-title" className="flex flex-col gap-4">
+        <div>
+          <h2 id="sources-title" className="text-md font-semibold">
+            {t("sources.title")}
+          </h2>
+          <p className="mt-1 max-w-[760px] text-ui text-muted">{t("sources.explainer")}</p>
+        </div>
+        {sources.ok ? (
+          <SourcesPanel sources={sources.value} canWrite={can(session, "data.sources")} />
+        ) : (
+          <NotAvailable compact reason={sources.reason} message={sources.message} />
+        )}
+      </section>
     </>
   );
 }

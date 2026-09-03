@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { useRef, useState, useTransition } from "react";
 
 import {
+  reindexDocument,
   removeDocument,
   setDocumentPublished,
   setDocumentScope,
@@ -18,30 +19,24 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
 import { Table, Td, Th } from "@/components/ui/table";
 import type { KbDocumentRow, KnowledgeScope } from "@/lib/contract";
-import { dayOf, formatCount, formatDate, formatTime } from "@/lib/format";
+import { dayOf, formatBytes, formatCount, formatDate, formatDateTime, formatTime } from "@/lib/format";
 import { humanize, ingestTone, messageKey } from "@/lib/tones";
 
 import { UploadZone } from "./upload-zone";
 
 /**
  * The documents the agent answers from. A row opens to show where it came
- * from and how far indexing got; switching off and deleting live there so a
- * misclick on the list cannot silence a document.
+ * from and how far indexing got; switching off, re-indexing and deleting
+ * live there so a misclick on the list cannot silence a document.
  */
 export function DocumentsPanel({
   documents,
   canUpload,
   renderedAt,
-  direction,
-  elsewhere,
 }: {
   documents: KbDocumentRow[];
   canUpload: boolean;
   renderedAt: string;
-  /** Which side of the panel this is: the list is what those calls can reach. */
-  direction: "inbound" | "outbound";
-  /** Documents kept for the other kind of call, counted but not listed. */
-  elsewhere: number;
 }) {
   const t = useTranslations("knowledge");
   const languages = useTranslations("languages");
@@ -55,28 +50,21 @@ export function DocumentsPanel({
   const live = documents.filter((doc) => doc.isPublished && doc.ingestStatus === "indexed").length;
   const pieces = documents.reduce((sum, doc) => sum + (doc.isPublished ? doc.chunks : 0), 0);
 
-  const toggle = (doc: KbDocumentRow) =>
+  const run = (work: () => Promise<{ ok: boolean; message?: string }>) =>
     startTransition(async () => {
       setError(null);
-      const result = await setDocumentPublished(doc.id, !doc.isPublished);
-      if (!result.ok) setError(result.message);
+      const result = await work();
+      if (!result.ok) setError(result.message ?? t("failed"));
     });
 
-  const rescope = (doc: KbDocumentRow, scope: KnowledgeScope) =>
-    startTransition(async () => {
-      setError(null);
-      const result = await setDocumentScope(doc.id, scope);
-      if (!result.ok) setError(result.message);
-    });
-
-  const remove = (id: string) =>
-    startTransition(async () => {
-      setError(null);
-      setDeletingId(null);
+  const remove = (id: string) => {
+    setDeletingId(null);
+    run(async () => {
       const result = await removeDocument(id);
-      if (!result.ok) setError(result.message);
-      else setOpenId(null);
+      if (result.ok) setOpenId(null);
+      return result;
     });
+  };
 
   const updated = (iso: string) => {
     switch (dayOf(iso, now)) {
@@ -96,7 +84,6 @@ export function DocumentsPanel({
           <span className="font-semibold">{t("documentsTitle")}</span>{" "}
           <span className="text-body text-muted">
             · {t("liveCount", { count: live })} · {t("pieces", { count: formatCount(pieces) })}
-            {elsewhere > 0 ? ` · ${t(`elsewhere.${direction}`, { count: elsewhere })}` : ""}
           </span>
         </div>
         {canUpload ? (
@@ -148,8 +135,9 @@ export function DocumentsPanel({
                   updatedLabel={updated(doc.updatedAt)}
                   canUpload={canUpload}
                   pending={pending}
-                  onSwitch={() => toggle(doc)}
-                  onRescope={(scope) => rescope(doc, scope)}
+                  onSwitch={() => run(() => setDocumentPublished(doc.id, !doc.isPublished))}
+                  onRescope={(scope) => run(() => setDocumentScope(doc.id, scope))}
+                  onReindex={() => run(() => reindexDocument(doc.id))}
                   onDelete={() => setDeletingId(doc.id)}
                 />
               );
@@ -175,6 +163,14 @@ export function DocumentsPanel({
   );
 }
 
+/** "48 pages", "1.2 MB" or "3,400 words", whichever the document has. */
+function sizeOf(doc: KbDocumentRow, t: ReturnType<typeof useTranslations<"knowledge">>): string {
+  if (doc.pageCount !== null) return t("pages", { count: doc.pageCount });
+  if (doc.wordCount !== null && doc.wordCount !== undefined) return t("words", { count: formatCount(doc.wordCount) });
+  if (doc.sizeBytes !== null && doc.sizeBytes !== undefined) return formatBytes(doc.sizeBytes);
+  return "—";
+}
+
 function DocumentRows({
   doc,
   open,
@@ -186,6 +182,7 @@ function DocumentRows({
   pending,
   onSwitch,
   onRescope,
+  onReindex,
   onDelete,
 }: {
   doc: KbDocumentRow;
@@ -198,10 +195,11 @@ function DocumentRows({
   pending: boolean;
   onSwitch: () => void;
   onRescope: (scope: KnowledgeScope) => void;
+  onReindex: () => void;
   onDelete: () => void;
 }) {
   const t = useTranslations("knowledge");
-  const size = doc.pageCount === null ? "—" : t("pages", { count: doc.pageCount });
+  const busy = doc.ingestStatus === "pending" || doc.ingestStatus === "indexing";
 
   return (
     <>
@@ -213,7 +211,7 @@ function DocumentRows({
         <Td>
           <span className="inline-flex items-center gap-2.5">
             <Icon name="file" className="text-muted" />
-            <span className="font-medium">
+            <span lang="hi" className="font-medium">
               {doc.title}
             </span>
           </span>
@@ -221,7 +219,7 @@ function DocumentRows({
         <Td>
           <span className="text-muted">{typeLabel}</span>
         </Td>
-        <Td>{size}</Td>
+        <Td>{sizeOf(doc, t)}</Td>
         <Td align="right">
           <span className="font-mono text-small">{doc.chunks > 0 ? formatCount(doc.chunks) : "—"}</span>
         </Td>
@@ -267,6 +265,12 @@ function DocumentRows({
                 <dd className="font-mono text-small">
                   {formatCount(doc.embedded)} / {formatCount(doc.chunks)}
                 </dd>
+                {doc.indexedAt ? (
+                  <>
+                    <dt className="text-muted">{t("detail.indexedAt")}</dt>
+                    <dd className="font-mono text-small">{formatDateTime(doc.indexedAt)}</dd>
+                  </>
+                ) : null}
                 {doc.ingestError ? (
                   <>
                     <dt className="text-muted">{t("detail.error")}</dt>
@@ -290,6 +294,9 @@ function DocumentRows({
                     </select>
                   </label>
                   <div className="flex gap-2">
+                    <Button icon="refresh" disabled={pending || busy} onClick={onReindex}>
+                      {t("reindex")}
+                    </Button>
                     <Button icon="power" disabled={pending} onClick={onSwitch}>
                       {doc.isPublished ? t("switchOff") : t("switchOn")}
                     </Button>

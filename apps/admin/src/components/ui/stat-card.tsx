@@ -1,6 +1,6 @@
-import { Card } from "@/components/ui/card";
+import { Card } from "./card";
 
-/** One of the four numbers across the top of Live: a label, a serif numeral, and a line under it. */
+/** One of the numbers across the top of a screen: a label, a serif numeral, and a line under it. */
 export function StatCard({
   label,
   value,

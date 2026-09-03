@@ -7,11 +7,13 @@ import { revalidatePath } from "next/cache";
 
 import type { KbDocumentRow, KnowledgeAnswer, KnowledgeScope } from "@/lib/contract";
 import {
+  addKbNote,
   addKbUrl,
   askKnowledge,
   deleteKbDocument,
   failure,
   patchKbDocument,
+  reindexKbDocument,
   uploadKbDocument,
   type ActionResult,
 } from "@/server/api";
@@ -20,14 +22,13 @@ import { guard } from "@/server/guard";
 /**
  * The knowledge base: what the agent is allowed to answer from.
  *
- * A file goes up as multipart, a website as JSON; both come back as a row
- * that is still indexing, and the page polls until it is not. Switching a
- * document off is a PATCH, never a delete, so a wrong price list can be
- * silenced in a second and looked at later.
+ * A file goes up as multipart, a website or a typed note as JSON; all come
+ * back as a row that is still indexing, and the page polls until it is not.
+ * Switching a document off is a PATCH, never a delete, so a wrong price list
+ * can be silenced in a second and looked at later.
  */
 
-const KNOWLEDGE_PAGE = "/[locale]/(panel)/inbound/knowledge";
-const OUTBOUND_KNOWLEDGE_PAGE = "/[locale]/(panel)/outbound/knowledge";
+const KNOWLEDGE_PAGE = "/[locale]/(panel)/knowledge";
 
 export type UploadState =
   | { status: "idle" }
@@ -61,7 +62,31 @@ export async function addDocument(_previous: UploadState, formData: FormData): P
       return { status: "error", message: t("nothingToAdd") };
     }
     revalidatePath(KNOWLEDGE_PAGE, "page");
-    revalidatePath(OUTBOUND_KNOWLEDGE_PAGE, "page");
+    return { status: "queued", title: row.title };
+  } catch (error) {
+    return { status: "error", message: failure(error, t("uploadFailed")).message };
+  }
+}
+
+/** A note typed straight into the panel: a title and a paragraph, indexed like a file. */
+export async function addNote(_previous: UploadState, formData: FormData): Promise<UploadState> {
+  const t = await getTranslations("actions");
+  const guarded = await guard("knowledge.upload");
+  if (!guarded.ok) return { status: "error", message: guarded.message };
+  const { session } = guarded;
+
+  const title = String(formData.get("title") ?? "").trim();
+  const text = String(formData.get("text") ?? "").trim();
+  const language = String(formData.get("language") ?? "").trim();
+  if (!title || !text) return { status: "error", message: t("noteIncomplete") };
+
+  try {
+    const row = await addKbNote(
+      session,
+      { title, text, scope: asScope(formData.get("scope")), ...(language ? { language } : {}) },
+      randomUUID(),
+    );
+    revalidatePath(KNOWLEDGE_PAGE, "page");
     return { status: "queued", title: row.title };
   } catch (error) {
     return { status: "error", message: failure(error, t("uploadFailed")).message };
@@ -94,7 +119,21 @@ async function change(
   try {
     const row = await patchKbDocument(session, documentId, patch);
     revalidatePath(KNOWLEDGE_PAGE, "page");
-    revalidatePath(OUTBOUND_KNOWLEDGE_PAGE, "page");
+    return { ok: true, value: row };
+  } catch (error) {
+    return failure(error, t("changeFailed"));
+  }
+}
+
+/** Extract, chunk and embed again -- after a failure, or after the model changed. */
+export async function reindexDocument(documentId: string): Promise<ActionResult<KbDocumentRow>> {
+  const t = await getTranslations("actions");
+  const guarded = await guard("knowledge.upload");
+  if (!guarded.ok) return guarded;
+  const { session } = guarded;
+  try {
+    const row = await reindexKbDocument(session, documentId, randomUUID());
+    revalidatePath(KNOWLEDGE_PAGE, "page");
     return { ok: true, value: row };
   } catch (error) {
     return failure(error, t("changeFailed"));
@@ -114,18 +153,17 @@ export async function removeDocument(documentId: string): Promise<ActionResult<n
   try {
     await deleteKbDocument(session, documentId);
     revalidatePath(KNOWLEDGE_PAGE, "page");
-    revalidatePath(OUTBOUND_KNOWLEDGE_PAGE, "page");
     return { ok: true, value: null };
   } catch (error) {
     return failure(error, t("changeFailed"));
   }
 }
 
-/** `answer: true` runs the phone agent against the question -- a model call, only on the second button. */
+/** `answer: true` runs the phone agent against the question -- a model call, only when asked for. */
 export async function askQuestion(
   question: string,
   answer: boolean,
-  direction: "inbound" | "outbound" = "inbound",
+  direction: "inbound" | "outbound",
 ): Promise<ActionResult<KnowledgeAnswer>> {
   const t = await getTranslations("actions");
   const guarded = await guard("knowledge.ask");

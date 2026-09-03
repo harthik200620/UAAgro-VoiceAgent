@@ -1,4 +1,11 @@
-import type { Activity, CampaignStatus, Contact, IngestStatus } from "./contract";
+import type {
+  Activity,
+  AttentionSeverity,
+  CampaignStatus,
+  Contact,
+  IngestStatus,
+  SyncRun,
+} from "./contract";
 
 /**
  * Meaning to colour, decided in one place.
@@ -33,6 +40,16 @@ const BAD = new Set([
   "spam",
 ]);
 const HANDED = new Set(["transferred", "handed_to_manager", "transfer"]);
+
+/** The outcomes the panel knows, for the Calls filter's suggestions. */
+export const KNOWN_OUTCOMES: readonly string[] = [
+  ...GOOD,
+  ...HANDED,
+  ...BAD,
+  "opted_out",
+  "cancelled",
+  "voicemail",
+];
 
 export function outcomeTone(outcome: string | null): Tone {
   if (!outcome) return "grey";
@@ -105,4 +122,27 @@ export function contactLabelKey(contact: Contact): string {
     return contact.outcome ?? contact.status;
   }
   return contact.status;
+}
+
+/** Red for what needs someone now, amber for today, grey for when there is time. */
+export function severityTone(severity: AttentionSeverity): Tone {
+  switch (severity) {
+    case "high":
+      return "red";
+    case "medium":
+      return "amber";
+    case "low":
+      return "grey";
+  }
+}
+
+export function syncTone(status: SyncRun["status"]): Tone {
+  switch (status) {
+    case "running":
+      return "amber";
+    case "ok":
+      return "green";
+    case "failed":
+      return "red";
+  }
 }

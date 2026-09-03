@@ -1,9 +1,11 @@
 {
   "nav": {
+    "overview": "Overview",
     "live": "Live",
     "calls": "Calls",
     "outbound": "Outbound",
-    "inbound": "Inbound",
+    "knowledge": "Knowledge",
+    "centres": "Centres",
     "flows": "Flows",
     "data": "Data",
     "signOut": "Sign out",
@@ -54,6 +56,24 @@
     "forbiddenTitle": "You cannot open this",
     "forbidden": "Your account does not have access to this screen. Ask the ops manager if you need it."
   },
+  "unavailable": {
+    "missing": {
+      "title": "Not available yet",
+      "text": "The control plane does not serve this part of the panel yet. It appears here as soon as it does."
+    },
+    "unreachable": {
+      "title": "Could not reach the control plane",
+      "text": "Nothing to show until it answers. Try again in a moment."
+    },
+    "forbidden": {
+      "title": "Your account cannot open this",
+      "text": "The control plane refused the request for this role."
+    },
+    "failed": {
+      "title": "Could not load",
+      "text": "The control plane answered with an error."
+    }
+  },
   "directions": {
     "inbound": "Inbound",
     "outbound": "Outbound"
@@ -99,12 +119,116 @@
     "fromCache": "from cache",
     "firstReply": "first reply"
   },
+  "overview": {
+    "title": "Overview",
+    "subtitle": "what is happening, what needs a person, how many calls came in and went out",
+    "stale": "Could not refresh",
+    "generatedAt": "figures at {time}",
+    "liveNow": "{count, plural, =0 {No calls right now} one {# call right now} other {# calls right now}}",
+    "ofCapacity": "of {capacity}",
+    "testCalls": "{count, plural, =0 {No test calls} one {# test call} other {# test calls}} from the browser page, counted separately",
+    "ranges": {
+      "label": "Period",
+      "today": "Today",
+      "7d": "7 days",
+      "30d": "30 days"
+    },
+    "stats": {
+      "inbound": "Inbound calls",
+      "outbound": "Outbound calls",
+      "answered": "Answered by the agent",
+      "transferred": "Handed to a person",
+      "missed": "Missed",
+      "ofCalls": "{percent}% of {total} calls",
+      "noCalls": "no calls in this period",
+      "campaignsRunning": "{count, plural, =0 {no campaign running} one {# campaign running} other {# campaigns running}}"
+    },
+    "speed": {
+      "title": "Reply speed",
+      "firstReply": "first reply, median",
+      "p95": "First reply, slowest 5%",
+      "everyReply": "Every reply, median",
+      "withinBudget": "Replies under 1.2 s",
+      "budgetBar": "{percent}% of replies within the budget",
+      "budgetNote": "The budget is 1,200 ms from the farmer going quiet to hearing the agent."
+    },
+    "funnel": {
+      "title": "Outbound funnel",
+      "running": "{count, plural, =0 {no campaign running} one {# campaign running} other {# campaigns running}}",
+      "empty": "No numbers dialled in this period.",
+      "share": "{value} · {percent}% of those dialled",
+      "steps": {
+        "dialled": "Dialled",
+        "reached": "Reached",
+        "pressed1": "Pressed 1",
+        "pressed2": "Pressed 2",
+        "optedOut": "Opted out"
+      }
+    },
+    "attention": {
+      "title": "Needs attention",
+      "count": "{count, plural, =0 {nothing open} one {# item} other {# items}}",
+      "empty": "Nothing needs a person right now.",
+      "severity": {
+        "high": "Now",
+        "medium": "Today",
+        "low": "Later"
+      },
+      "kinds": {
+        "ticket": "{count, plural, one {# open ticket} other {# open tickets}}",
+        "transfer_failed": "{count, plural, one {# hand-over failed} other {# hand-overs failed}}",
+        "unanswered": "{count, plural, one {# call the agent could not answer} other {# calls the agent could not answer}}",
+        "stock_out": "{count, plural, one {# product out of stock} other {# products out of stock}}",
+        "knowledge_pending": "{count, plural, one {# document waiting to index} other {# documents waiting to index}}",
+        "knowledge_failed": "{count, plural, one {# document failed to index} other {# documents failed to index}}",
+        "campaign_blocked": "{count, plural, one {# campaign blocked by the checks} other {# campaigns blocked by the checks}}",
+        "telephony": "Telephony is not configured",
+        "llm": "The language model is not answering",
+        "worker": "The background worker has not been seen"
+      }
+    },
+    "chart": {
+      "title": "Calls by hour",
+      "subtitle": "inbound and outbound, in Indian time",
+      "legend": "Series",
+      "inbound": "Inbound",
+      "outbound": "Outbound",
+      "showTable": "Show as table",
+      "showChart": "Show as chart",
+      "tooltip": "{label}: {inbound} inbound, {outbound} outbound",
+      "columns": {
+        "hour": "Hour",
+        "day": "Day"
+      },
+      "total": "Total",
+      "empty": "No calls in this period yet."
+    },
+    "questions": {
+      "title": "Top questions",
+      "empty": "No questions recorded yet.",
+      "outcomes": "How calls ended",
+      "noOutcomes": "No calls ended in this period."
+    },
+    "recent": {
+      "title": "Recent calls",
+      "all": "All calls",
+      "empty": "No calls yet.",
+      "unknownFarmer": "Unknown farmer",
+      "test": "test",
+      "open": "Open the call"
+    }
+  },
   "live": {
     "title": "Live",
     "subtitle": "everything on this page updates as it happens",
     "stream": {
       "connecting": "Connecting…",
       "reconnecting": "Reconnecting…"
+    },
+    "telephony": {
+      "simulator": "Simulator · answered from the browser",
+      "notConfigured": "Telephony not configured",
+      "testPage": "Browser test page"
     },
     "inProgress": "{count, plural, =0 {No calls in progress} one {# call in progress} other {# calls in progress}}",
     "ofCapacity": "of {capacity}",
@@ -158,6 +282,8 @@
     "empty": "No calls match these filters.",
     "unknownFarmer": "Unknown farmer",
     "transferred": "handed over",
+    "test": "test",
+    "hasRecording": "Recording available",
     "openCall": "Open the call",
     "columns": {
       "time": "Time",
@@ -167,7 +293,8 @@
       "centre": "Centre",
       "outcome": "Outcome",
       "length": "Length",
-      "firstReply": "First reply"
+      "firstReply": "First reply",
+      "summary": "Summary"
     },
     "filters": {
       "from": "From",
@@ -181,6 +308,7 @@
       "centre": "Centre",
       "search": "Search the transcripts",
       "searchPlaceholder": "a word the farmer or the agent said",
+      "includeTest": "Include test calls",
       "apply": "Apply",
       "clear": "Clear"
     },
@@ -194,10 +322,14 @@
     "backToCampaign": "Outbound",
     "backToCalls": "Calls",
     "unknownFarmer": "Unknown farmer",
+    "testCall": "Test call",
     "centreName": "{name} centre",
     "seconds": "{count, plural, one {# second} other {# seconds}}",
+    "intents": "What the farmer asked about",
     "callAgain": "Call again",
     "comingWithTelephony": "Coming with telephony",
+    "summariseAgain": "Summarise again",
+    "summarising": "Summarising…",
     "share": "Share",
     "copied": "Link copied",
     "noRecording": "No recording for this call.",
@@ -229,6 +361,18 @@
         "lineOut": "Phone line out"
       }
     },
+    "stats": {
+      "title": "{count, plural, one {# turn} other {# turns}}",
+      "turns": "Turns",
+      "turnsValue": "{farmer} farmer · {agent} agent",
+      "cachedReplies": "Replies from cache",
+      "toolCalls": "Tool calls",
+      "model": "Model"
+    },
+    "events": {
+      "title": "Events",
+      "empty": "Nothing besides the conversation."
+    },
     "details": {
       "outcome": "Outcome",
       "campaign": "Campaign",
@@ -243,9 +387,9 @@
   },
   "outbound": {
     "title": "Outbound",
-    "subtitle": "Farmers are called in the order you gave, as many at a time as you allow. Cards turn yellow while a call is on and green when it is done.",
+    "subtitle": "Paste numbers to call them now, or set up a campaign for later. Cards turn yellow while a call is on and green when it is done.",
     "newCampaign": "New campaign",
-    "empty": "No campaigns yet. Paste a list of numbers to start one.",
+    "empty": "No campaigns yet. Paste a list of numbers above to start one.",
     "startedAt": "started {time}",
     "createdOn": "created {date}",
     "callingHours": "calling hours {from}–{to}",
@@ -253,6 +397,25 @@
     "doneOf": "{done} of {total} done",
     "listCounts": "{pressed1} pressed 1 · {pressed2} wanted details · {noAnswer} no answer",
     "firstReplyMedian": "first reply, median"
+  },
+  "quickDial": {
+    "title": "Call these numbers now",
+    "explainer": "One number per line, or “name, number”. The checks run, the campaign starts, and every call shows on Live as it happens.",
+    "numbers": "Numbers",
+    "numbersHint": "{count, plural, =0 {No numbers yet} one {# number} other {# numbers}}",
+    "numbersPlaceholder": "Ram Singh, 98765 43210\n98765 43211",
+    "flow": "Script",
+    "noFlows": "There is no published outbound script yet, so there is nothing for the agent to say.",
+    "goToFlows": "Write one under Flows.",
+    "name": "Name (optional)",
+    "nameHint": "Left blank, the campaign is named “Quick dial” with the date and time.",
+    "namePlaceholder": "Quick dial",
+    "consent": "These farmers have agreed to promotional calls from UA Agro (recorded at the centre or a meeting)",
+    "thenLive": "Calls appear on Live the moment they start.",
+    "calling": "Starting the calls…",
+    "callNow": "Call now",
+    "notStarted": "The list is in, but the calls have not started",
+    "another": "Call another list"
   },
   "newCampaign": {
     "title": "New campaign",
@@ -306,7 +469,9 @@
     "duplicate_suppression": "Duplicate number",
     "duplicate": "Duplicate number",
     "invalid_number": "Not a valid number",
-    "opted_out": "Asked not to be called"
+    "opted_out": "Asked not to be called",
+    "four_eyes": "Waiting for a second approver",
+    "telephony_unconfigured": "Telephony is not configured"
   },
   "exclusions": {
     "dnd": "on the DND register",
@@ -330,6 +495,7 @@
   "contactLabels": {
     "unknown": "Unknown",
     "waiting": "Waiting",
+    "ringing": "Ringing",
     "in_call": "In call",
     "removed": "Removed",
     "pressed_1": "1 · yes",
@@ -339,7 +505,8 @@
     "no_answer": "No answer",
     "busy": "Busy",
     "failed": "Failed",
-    "wrong_person": "Wrong person"
+    "wrong_person": "Wrong person",
+    "answer": "Answer in browser"
   },
   "campaign": {
     "title": "Outbound",
@@ -387,9 +554,13 @@
   "actions": {
     "forbidden": "Your account cannot do this.",
     "campaignIncomplete": "Give the campaign a name, choose a script and paste at least one number.",
+    "numbersRequired": "Paste at least one number.",
     "consentRequired": "Confirm that these farmers agreed to promotional calls.",
     "campaignFailed": "The campaign could not be saved.",
+    "dialFailed": "The calls could not be started.",
+    "summariseFailed": "The summary could not be rewritten.",
     "nothingToAdd": "Choose a file or enter a website address.",
+    "noteIncomplete": "A note needs a title and some text.",
     "uploadFailed": "The document could not be added.",
     "changeFailed": "The change could not be saved.",
     "askSomething": "Type a question first.",
@@ -401,31 +572,31 @@
     "saveFailed": "The script could not be saved.",
     "publishFailed": "The script could not be published.",
     "nameRequired": "Give the script a name.",
+    "promptEmpty": "The instructions cannot be empty.",
+    "promptTooLong": "The instructions are over 12,000 characters.",
     "restoredFrom": "Restored from v{version}",
     "previewFailed": "The preview is not available right now.",
     "badPhone": "Enter a phone number with 10 to 13 digits.",
     "testCallFailed": "The test call could not be placed.",
     "dsnRequired": "Paste a connection string to test.",
     "testFailed": "The connection could not be tested.",
+    "sourceIncomplete": "A source needs a name, a host, a database and a user.",
+    "sourcePasswordRequired": "Enter the database password.",
+    "tableRequired": "Choose a table first.",
+    "mappingIncomplete": "Map every required field before saving.",
+    "syncFailed": "The sync could not be started.",
     "signedOut": "Your sign-in has ended. Sign in again.",
     "controlPlaneDown": "The control plane is not answering. Nothing was changed; try again in a moment."
   },
-  "inbound": {
-    "title": "Inbound",
-    "tabsLabel": "Inbound sections",
-    "tabs": {
-      "knowledge": "Knowledge base",
-      "centres": "Centres & managers",
-      "greeting": "Greeting"
-    }
-  },
   "knowledge": {
-    "subtitle": "What the agent knows when a farmer calls the office number.",
+    "title": "Knowledge",
+    "subtitle": "What the agent knows: on the helpline, on campaign calls, or both. Prices and stock always come from the catalogue, never from a document.",
     "documentsTitle": "Documents the agent answers from",
     "liveCount": "{count} live",
     "pieces": "{count} searchable pieces",
     "addDocument": "Add document",
-    "empty": "No documents yet. Add a price list, a crop guide or the website and the agent starts answering from it within minutes.",
+    "empty": "No documents yet. Add a price list, a crop guide, a web page or a note and the agent starts answering from it within minutes.",
+    "failed": "The change could not be made.",
     "columns": {
       "document": "Document",
       "type": "Type",
@@ -451,6 +622,7 @@
       "web": "Web"
     },
     "pages": "{count, plural, one {# page} other {# pages}}",
+    "words": "{count} words",
     "todayAt": "Today, {time}",
     "yesterday": "Yesterday",
     "collapse": "Hide details",
@@ -459,8 +631,10 @@
       "source": "Source",
       "version": "Version",
       "embedded": "Pieces indexed",
+      "indexedAt": "Indexed",
       "error": "Problem"
     },
+    "reindex": "Re-index",
     "switchOff": "Switch off",
     "switchOn": "Switch on",
     "delete": "Delete",
@@ -471,21 +645,41 @@
       "sending": "Sending…",
       "drop": "Drop a PDF, Word file, spreadsheet, text file here — or choose one",
       "dropHint": "Ready to answer from within a few minutes. Prices and stock always come from the catalogue, never from a document.",
-      "url": "Or a website address",
+      "url": "Or fetch a web page",
       "title": "Title (optional)",
-      "addUrl": "Add",
+      "addUrl": "Fetch",
       "queued": "“{title}” is being indexed — ready to answer from in a few minutes.",
       "usedOn": "Used on",
       "scopeBoth": "Both kinds of call",
       "scopeInbound": "Helpline only",
       "scopeOutbound": "Campaign calls only"
     },
+    "note": {
+      "title": "Add a note",
+      "explainer": "A quick answer typed here — a price change, a new timing — is indexed like a document and answered from within a minute.",
+      "noteTitle": "Title",
+      "titlePlaceholder": "Urea price from Monday",
+      "text": "Text",
+      "textPlaceholder": "Write what the agent should know…",
+      "usedOn": "Used on",
+      "scopeBoth": "Both kinds of call",
+      "scopeInbound": "Helpline only",
+      "scopeOutbound": "Campaign calls only",
+      "adding": "Adding…",
+      "add": "Add note",
+      "queued": "“{title}” is being indexed."
+    },
     "ask": {
       "title": "Try a question",
       "placeholder": "What is the treatment for late blight in potato?",
       "question": "Question",
+      "asCall": "Ask as",
+      "helpline": "Helpline",
+      "campaignCall": "Campaign call",
+      "likeThePhone": "Answer like the phone would",
+      "asking": "Asking…",
+      "askAndAnswer": "Search and answer",
       "search": "Search",
-      "alsoAnswer": "Also generate the spoken answer",
       "agentWouldSay": "The agent would say",
       "foundIn": "Found in",
       "nothingFound": "Nothing in the knowledge base matches this. The agent would offer an agronomist call-back.",
@@ -493,40 +687,49 @@
       "fullAnswerIn": "Full answer in",
       "degraded": "Search ran in degraded mode; results may be incomplete."
     },
-    "outboundTitle": "Outbound",
-    "outboundSubtitle": "What an offer call can answer with when a farmer presses 2.",
+    "health": {
+      "workerAlive": "Indexing worker alive",
+      "workerDown": "Indexing worker not seen",
+      "lastSeen": "last seen {time}",
+      "neverSeen": "never seen",
+      "indexed": "Indexed",
+      "pending": "Waiting",
+      "failed": "Failed",
+      "pieces": "Pieces indexed",
+      "model": "Model",
+      "retrieval": "Last search"
+    },
     "usedOn": "Used on",
     "scopes": {
       "both": "Both",
       "inbound": "Helpline only",
       "outbound": "Campaign calls only"
-    },
-    "elsewhere": {
-      "inbound": "{count} kept for campaign calls only",
-      "outbound": "{count} kept for the helpline only"
     }
   },
   "centres": {
-    "subtitle": "Where farmers are sent, and who takes over when the agent should not answer.",
     "title": "Centres",
-    "openCount": "{count} open",
-    "explainer": "the agent sends each farmer to the nearest one and hands calls to its manager",
-    "empty": "No centres yet. Add the first one on the right.",
+    "subtitle": "Every store on the map, with what the agent tells a farmer about it: where, when, who, and what has run out.",
+    "listTitle": "{count, plural, one {# centre} other {# centres}}",
+    "openNowCount": "{count} open now",
+    "empty": "No centres yet. Add the first one below.",
+    "primary": "Primary",
+    "openNow": "Open now",
+    "closedNow": "Closed now",
+    "closed": "Switched off",
+    "noLocation": "no location yet",
+    "noServices": "no services listed",
+    "stockOuts": "{count, plural, =0 {nothing out of stock} one {# product out of stock} other {# products out of stock}}",
+    "isPrimaryHint": "The helpline answers stock and price for this centre when the caller's own is unknown.",
+    "setPrimary": "Set as primary",
+    "openLabel": "{centre} open",
+    "close": "Close",
+    "map": {
+      "clickToPlace": "Click the map to place {name}."
+    },
     "columns": {
-      "centre": "Centre",
       "manager": "Manager",
-      "managerNumber": "Manager's number",
-      "hours": "Hours",
-      "stock": "In stock today",
       "open": "Open"
     },
-    "openLabel": "{centre} open",
-    "open": "Open",
-    "closed": "Closed",
-    "inStock": "in stock",
-    "outOfStock": "out of stock",
-    "collapse": "Hide details",
-    "expand": "Show details",
     "editor": {
       "name": "Name",
       "nameHi": "Name in Hindi",
@@ -542,6 +745,11 @@
       "opens": "Opens",
       "closes": "Closes",
       "workingDays": "Working days",
+      "primary": "Primary centre",
+      "addressSpoken": "Address, as the agent says it",
+      "addressSpokenHint": "Spoken to the farmer: “near the bus stand, opposite the bank”.",
+      "services": "Services",
+      "servicesHint": "Comma-separated: seeds, fertiliser, soil testing",
       "saved": "Saved",
       "save": "Save changes",
       "stockTitle": "Stock the agent can mention",
@@ -561,12 +769,19 @@
       "pincode": "Pincode",
       "state": "State",
       "location": "Location",
-      "locationHint": "Type it as latitude, longitude — 27.87, 81.50",
+      "locationHint": "Type it as latitude, longitude — 27.87, 81.50 — or open the centre afterwards and click the map.",
       "manager": "Manager",
       "managerPlaceholder": "Name",
       "managerNumber": "Manager's number",
+      "phone": "Centre phone",
       "opens": "Opens",
       "closes": "Closes",
+      "addressSpoken": "Address, as the agent says it",
+      "addressSpokenHint": "Spoken to the farmer: “near the bus stand, opposite the bank”.",
+      "services": "Services",
+      "servicesHint": "Comma-separated",
+      "servicesPlaceholder": "seeds, fertiliser, soil testing",
+      "primary": "Make this the primary centre",
       "added": "Added as {code}.",
       "cancel": "Cancel",
       "submit": "Add centre"
@@ -591,13 +806,9 @@
     "sat": "Sat",
     "sun": "Sun"
   },
-  "greeting": {
-    "subtitle": "What the agent says when it picks up, and how it says goodbye.",
-    "empty": "There is no inbound script yet. The control plane creates the first one; after that every change is made here."
-  },
   "flows": {
     "title": "Flows",
-    "subtitle": "What the agent says on outbound and inbound calls. Change the words, not the code.",
+    "subtitle": "What the agent says on outbound and inbound calls, and the instructions behind the helpline. Change the words, not the code.",
     "tabsLabel": "Call direction",
     "types": {
       "outbound": "Outbound",
@@ -639,9 +850,17 @@
       "saveDraft": "Save draft",
       "publishAs": "Publish as v{version}",
       "publishQuestion": "{type, select, outbound {Every outbound call from the next one onwards will use these words.} other {Every farmer who calls from now on will hear these words.}}",
+      "publishPromptNote": "The instructions change with it and are live on the next call.",
       "cancel": "Not yet",
       "publish": "Publish",
       "systemPrompt": "The instructions behind the script (read-only)"
+    },
+    "prompt": {
+      "title": "The instructions behind the helpline",
+      "explainer": "Who the agent is, what it may promise, when it hands over. Saved with the script; live on the next call once published.",
+      "restoreDefault": "Restore default",
+      "words": "{count, plural, one {# word} other {# words}}",
+      "chars": "{count} / {max} characters"
     },
     "steps": {
       "opening": "Opening",
@@ -654,7 +873,7 @@
       "buttons": "What each button does",
       "key1": "Wants the offer — say this, then send the WhatsApp message",
       "key2": "Wants details — the agent answers from the knowledge base, then returns to the question",
-      "key2Detail": "Any question about crops, products, prices or the centre is answered from <b>Inbound → Knowledge base</b>. No dose or price is ever made up: if it is not in the knowledge base, the agent offers an agronomist call-back.",
+      "key2Detail": "Any question about crops, products, prices or the centre is answered from <b>Knowledge</b>. No dose or price is ever made up: if it is not in the knowledge base, the agent offers an agronomist call-back.",
       "key9": "Do not call again — always on, cannot be switched off",
       "closing": "Closing"
     },
@@ -696,7 +915,7 @@
   },
   "data": {
     "title": "Data",
-    "subtitle": "Everything the agent and this panel keep, and where. Nothing here is edited by hand.",
+    "subtitle": "Everything the agent and this panel keep, and where — and the client's own database as a source for stores, products and stock.",
     "storage": {
       "title": "What is stored, and where",
       "countedAt": "counted at {time}",
@@ -747,11 +966,102 @@
       "noBackupYet": "none yet",
       "checking": "checking…",
       "unknown": "unknown"
+    },
+    "sources": {
+      "title": "Client database (MySQL)",
+      "explainer": "The client's own database, read directly: stores, products and stock are pulled into the catalogue on demand or on a schedule, and the agent answers from the copy. Nothing is deleted by a sync.",
+      "add": "Add a source",
+      "empty": "No client database connected yet.",
+      "kind": "MySQL",
+      "tls": "TLS",
+      "noTls": "No TLS",
+      "passwordSet": "Password set",
+      "noPassword": "No password",
+      "scheduleLabel": "Sync",
+      "schedule": {
+        "manual": "by hand",
+        "hourly": "every hour",
+        "daily": "every day"
+      },
+      "lastRun": "Last sync",
+      "noRuns": "never synced",
+      "runStatus": {
+        "running": "Running",
+        "ok": "OK",
+        "failed": "Failed"
+      },
+      "runCounts": "{stores} stores · {products} products · {stock} stock rows",
+      "notSynced": "not synced",
+      "incomplete": "{count, plural, one {# field missing} other {# fields missing}}",
+      "mapped": "mapped",
+      "sync": "Sync now",
+      "runs": "Runs",
+      "test": "Test connection",
+      "mapping": "Mapping",
+      "edit": "Edit",
+      "delete": "Delete",
+      "deleteTitle": "Remove this source?",
+      "deleteQuestion": "The catalogue keeps what was synced; nothing is read from this database again.",
+      "cancel": "Keep it",
+      "confirmDelete": "Remove",
+      "form": {
+        "title": "New source",
+        "editTitle": "Edit {name}",
+        "name": "Name",
+        "host": "Host",
+        "port": "Port",
+        "database": "Database",
+        "user": "User",
+        "password": "Password",
+        "passwordKeep": "Leave blank to keep the stored password.",
+        "passwordHint": "Encrypted at rest; never shown again.",
+        "tls": "Use TLS",
+        "schedule": "Sync schedule",
+        "test": "Test connection",
+        "testing": "Testing…",
+        "save": "Save",
+        "saving": "Saving…",
+        "cancel": "Cancel",
+        "reachable": "Reachable",
+        "unreachable": "Not reachable",
+        "tables": "{count, plural, =0 {no tables visible} one {# table} other {# tables}}"
+      }
+    },
+    "mapping": {
+      "title": "Map their tables to ours",
+      "explainer": "Choose their table for each of ours, then the column for every field. Required fields are marked *; the first rows are shown so the right column is easy to spot.",
+      "tables": {
+        "stores": "Stores",
+        "products": "Products",
+        "stock": "Stock"
+      },
+      "syncTable": "Sync {table}",
+      "table": "Their table",
+      "typeTable": "table name",
+      "column": "column",
+      "loadingColumns": "loading…",
+      "missing": "Still needed: {fields}",
+      "sample": "First rows",
+      "noSample": "The table is empty.",
+      "save": "Save mapping",
+      "saving": "Saving…",
+      "close": "Close"
+    },
+    "runs": {
+      "started": "Started",
+      "finished": "Finished",
+      "status": "Status",
+      "stores": "Stores",
+      "products": "Products",
+      "stock": "Stock",
+      "error": "Error",
+      "empty": "No syncs yet.",
+      "loading": "Loading runs…",
+      "states": {
+        "running": "Running",
+        "ok": "OK",
+        "failed": "Failed"
+      }
     }
-  },
-  "outboundTabs": {
-    "label": "Outbound sections",
-    "campaigns": "Campaigns",
-    "knowledge": "Knowledge"
   }
 }

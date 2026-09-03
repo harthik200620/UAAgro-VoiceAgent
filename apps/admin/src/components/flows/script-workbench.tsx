@@ -13,6 +13,7 @@ import type { FlowScript, FlowType, InboundScript, OutboundScript } from "@/lib/
 import { isOutboundScript } from "@/lib/flows";
 
 import { PreviewPanel } from "./preview-panel";
+import { PromptEditor } from "./prompt-editor";
 import { LockedText, ScriptStep, ScriptText } from "./script-step";
 import { TestCallDialog } from "./test-call-dialog";
 import { VersionsCard, type VersionRow } from "./versions-card";
@@ -26,64 +27,69 @@ type WorkbenchFlow = {
   publishedAt: string | null;
 };
 
+/** The helpline's persona, for an inbound flow; outbound flows carry none to edit. */
+export type EditablePrompt = { text: string; defaultText: string | null };
+
 /**
  * The script editor and its two side cards, sharing one piece of state: the
- * words as they are now. Nothing changes on the phones until Publish, and
- * Publish is confirmed; editing a live version makes a draft, so the live
- * one is never touched in place.
- *
- * Used by Flows for either direction and by Inbound → Greeting for the
- * inbound script; `destination` says where a newly made version opens.
+ * words as they are now -- and, for the helpline, the persona behind them.
+ * Nothing changes on the phones until Publish, and Publish is confirmed;
+ * editing a live version makes a draft, so the live one is never touched in
+ * place.
  */
 export function ScriptWorkbench({
   flow,
   script: initial,
+  prompt,
   versions,
   nextVersion,
   canPublish,
-  destination,
   children,
 }: {
   flow: WorkbenchFlow;
   script: FlowScript;
+  prompt: EditablePrompt | null;
   versions: VersionRow[];
   nextVersion: number;
   canPublish: boolean;
-  destination: "flows" | "greeting";
   /** Server-rendered extras under the steps. */
   children?: ReactNode;
 }) {
   const t = useTranslations("flows.editor");
   const router = useRouter();
   const [script, setScript] = useState<FlowScript>(initial);
+  const [promptText, setPromptText] = useState(prompt?.text ?? "");
   const [testing, setTesting] = useState(false);
   const [confirmingPublish, setConfirmingPublish] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  const dirty = JSON.stringify(script) !== JSON.stringify(initial);
+  const scriptDirty = JSON.stringify(script) !== JSON.stringify(initial);
+  const promptDirty = prompt !== null && promptText !== prompt.text;
+  const dirty = scriptDirty || promptDirty;
+  const promptToSave = promptDirty ? promptText : null;
   const publishVersion = flow.isPublished ? nextVersion : flow.version;
-  const hrefFor = (id: string) => (destination === "flows" ? `/flows/${id}` : "/inbound/greeting");
+
+  const open = (id: string) => {
+    router.push(`/flows/${id}`);
+    router.refresh();
+  };
 
   const save = () =>
     startTransition(async () => {
       setError(null);
-      const result = await saveScript(flow.id, script, flow.isPublished);
-      if (result.ok) {
-        router.push(hrefFor(result.value.id));
-        router.refresh();
-      } else setError(result.message);
+      const result = await saveScript(flow.id, script, flow.isPublished, promptToSave);
+      if (result.ok) open(result.value.id);
+      else setError(result.message);
     });
 
   const publish = () =>
     startTransition(async () => {
       setError(null);
       setConfirmingPublish(false);
-      const result = await publishScript(flow.id, dirty ? script : null, flow.isPublished);
-      if (result.ok) {
-        router.push(hrefFor(result.value.id));
-        router.refresh();
-      } else setError(result.message);
+      const result = await publishScript(flow.id, dirty ? script : null, flow.isPublished, promptToSave);
+      if (result.ok) open(result.value.id);
+      else setError(result.message);
     });
 
   const state = flow.isPublished ? "live" : flow.publishedAt ? "retired" : "draft";
@@ -96,9 +102,7 @@ export function ScriptWorkbench({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 grow basis-[420px]">
             <div className="flex flex-wrap items-center gap-2.5">
-              <span className="text-xl font-semibold">
-                {flow.name}
-              </span>
+              <span className="text-xl font-semibold">{flow.name}</span>
               <Chip tone={state === "live" ? "green" : "grey"}>
                 v{flow.version} · {t(`state.${state}`)}
               </Chip>
@@ -134,13 +138,22 @@ export function ScriptWorkbench({
           <InboundSteps script={script} onChange={setScript} />
         )}
 
+        {prompt ? (
+          <PromptEditor
+            value={promptText}
+            defaultValue={prompt.defaultText}
+            disabled={pending}
+            onChange={setPromptText}
+          />
+        ) : null}
+
         {children}
       </Card>
 
       {/* Beside the editor only on a wide screen; below it otherwise, so the steps never get narrow. */}
       <div className="flex w-full shrink-0 flex-col gap-4 2xl:w-[280px]">
         <PreviewPanel flowId={flow.id} text={previewText} step={isOutboundScript(script) ? 3 : 1} />
-        <VersionsCard versions={versions} currentId={flow.id} hrefAfterRestore={hrefFor} />
+        <VersionsCard versions={versions} currentId={flow.id} />
       </div>
 
       <TestCallDialog flowId={flow.id} open={testing} onClose={() => setTesting(false)} />
@@ -151,6 +164,7 @@ export function ScriptWorkbench({
         title={t("publishAs", { version: publishVersion })}
       >
         <p className="text-ui text-muted">{t("publishQuestion", { type: flow.flowType })}</p>
+        {promptDirty ? <p className="text-ui text-muted">{t("publishPromptNote")}</p> : null}
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={() => setConfirmingPublish(false)}>
             {t("cancel")}

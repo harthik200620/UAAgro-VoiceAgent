@@ -1,27 +1,57 @@
-import { LiveBoard } from "@/components/live/live-board";
+import { getTranslations } from "next-intl/server";
+
+import { OverviewBoard } from "@/components/overview/overview-board";
+import { RangeSwitch } from "@/components/overview/range-switch";
 import { Forbidden } from "@/components/ui/forbidden";
+import { NotAvailable } from "@/components/ui/not-available";
+import { PageHeader } from "@/components/ui/page-header";
+import type { OverviewRange } from "@/lib/contract";
 import { can } from "@/lib/rbac";
-import { getLiveSnapshot } from "@/server/api";
+import { getOverview } from "@/server/api";
+import { load } from "@/server/load";
 import { currentSession } from "@/server/session";
 
-/** Never cached and never prerendered: a cached live view is a contradiction. */
+/** Never cached and never prerendered: the figures are the point. */
 export const dynamic = "force-dynamic";
 
+function asRange(value: string | string[] | undefined): OverviewRange {
+  return value === "7d" || value === "30d" ? value : "today";
+}
+
 /**
- * Live -- the home screen. The snapshot is fetched here, on the server, and
- * handed to the board as plain data; from then on the board follows the
- * event stream through the panel's own `/api/events/live`.
+ * Overview -- the home screen. The first read happens here on the server so
+ * the page arrives drawn; the board keeps it current from the browser through
+ * the panel's own route handler, never with a token of its own.
  */
-export default async function LivePage() {
+export default async function OverviewPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const session = await currentSession();
   if (!session || !can(session, "calls.view")) return <Forbidden />;
 
-  const snapshot = await getLiveSnapshot(session);
+  const range = asRange((await searchParams).range);
+  const overview = await load(getOverview(session, range));
 
+  if (!overview.ok) {
+    const t = await getTranslations("overview");
+    return (
+      <>
+        <PageHeader title={t("title")} subtitle={t("subtitle")}>
+          <RangeSwitch active={range} />
+        </PageHeader>
+        <NotAvailable reason={overview.reason} message={overview.message} />
+      </>
+    );
+  }
+
+  // Keyed on the range so a switch starts the board afresh with the new figures.
   return (
-    <LiveBoard
-      snapshot={snapshot}
-      canIntervene={can(session, "calls.intervene")}
+    <OverviewBoard
+      key={range}
+      initial={overview.value}
+      range={range}
       renderedAt={new Date().toISOString()}
     />
   );

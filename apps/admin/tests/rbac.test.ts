@@ -13,29 +13,40 @@ const session = (role: Role): Session => ({
 });
 
 describe("roles and capabilities", () => {
-  it("gives the ops manager everything but the connection and the user list", () => {
+  it("gives the ops manager everything but the connection and the client's sources", () => {
     const ops = capabilitiesFor("ops_manager");
     const admin = capabilitiesFor("super_admin");
     expect(admin.filter((capability) => !ops.includes(capability))).toEqual([
       "data.connection",
-      "users.manage",
+      "data.sources",
     ]);
   });
 
-  it("keeps the database connection to the super_admin", () => {
-    // A DSN is the one secret the panel ever handles.
-    const holders = ROLES.filter((role) => capabilitiesFor(role).includes("data.connection"));
-    expect(holders).toEqual(["super_admin"]);
+  it("keeps the database connection and the sources to the super_admin", () => {
+    // A DSN and a MySQL password are the only secrets the panel ever handles.
+    for (const capability of ["data.connection", "data.sources"] as const) {
+      const holders = ROLES.filter((role) => capabilitiesFor(role).includes(capability));
+      expect(holders, capability).toEqual(["super_admin"]);
+    }
   });
 
   it("lets a centre manager run their centre and nothing else", () => {
     const manager = session("centre_manager");
-    for (const capability of ["calls.view", "calls.listen", "inventory.edit", "campaigns.view"] as const) {
+    for (const capability of [
+      "calls.view",
+      "calls.listen",
+      "inventory.edit",
+      "campaigns.view",
+      "centres.view",
+      "knowledge.view",
+      "knowledge.ask",
+    ] as const) {
       expect(can(manager, capability), capability).toBe(true);
     }
     for (const capability of [
       "calls.intervene",
       "campaigns.create",
+      "campaigns.dial",
       "campaigns.control",
       "flows.edit",
       "knowledge.upload",
@@ -46,27 +57,28 @@ describe("roles and capabilities", () => {
     }
   });
 
-  it("lets an agronomist try questions without uploading", () => {
+  it("lets an agronomist try questions without uploading, and see no calls", () => {
     const agronomist = session("agronomist");
+    expect(can(agronomist, "knowledge.view")).toBe(true);
     expect(can(agronomist, "knowledge.ask")).toBe(true);
     expect(can(agronomist, "knowledge.upload")).toBe(false);
+    expect(can(agronomist, "calls.view")).toBe(false);
   });
 
-  it("keeps read_only genuinely read-only", () => {
-    for (const capability of capabilitiesFor("read_only")) {
-      expect(capability.endsWith(".view")).toBe(true);
-    }
-    expect(can(session("read_only"), "calls.listen")).toBe(false);
+  it("gives read_only and auditor nothing the API would refuse them", () => {
+    // Every panel route needs at least an agronomist, so a grant here would
+    // only ever produce a 403.
+    expect(capabilitiesFor("read_only")).toEqual([]);
+    expect(capabilitiesFor("auditor")).toEqual([]);
+  });
+
+  it("lets only an ops manager or above call a list right now", () => {
+    const holders = ROLES.filter((role) => capabilitiesFor(role).includes("campaigns.dial"));
+    expect(holders).toEqual(["ops_manager", "super_admin"]);
   });
 
   it("grants nothing without a session", () => {
     // A signed-out user must not fall through to a permissive default.
     expect(can(null, "calls.view")).toBe(false);
-  });
-
-  it("grants every role at least the live view", () => {
-    for (const role of ROLES) {
-      expect(can(session(role), "calls.view"), role).toBe(true);
-    }
   });
 });

@@ -11,6 +11,7 @@ import { Toggle } from "@/components/ui/toggle";
 import type { CentrePatch, CentreRow, StockRow } from "@/lib/contract";
 import { formatCount } from "@/lib/format";
 
+import type { Location } from "./centres-map";
 import { WEEK, type Weekday } from "./working-days";
 
 type Draft = {
@@ -28,6 +29,9 @@ type Draft = {
   openTime: string;
   closeTime: string;
   workingDays: string[];
+  addressSpoken: string;
+  services: string;
+  isPrimary: boolean;
 };
 
 function draftOf(centre: CentreRow): Draft {
@@ -46,6 +50,9 @@ function draftOf(centre: CentreRow): Draft {
     openTime: centre.openTime,
     closeTime: centre.closeTime,
     workingDays: centre.workingDays,
+    addressSpoken: centre.addressSpoken ?? "",
+    services: (centre.services ?? []).join(", "),
+    isPrimary: centre.isPrimary ?? false,
   };
 }
 
@@ -67,23 +74,37 @@ function patchFrom(before: Draft, after: Draft): CentrePatch {
   if (changed("openTime")) patch.openTime = after.openTime;
   if (changed("closeTime")) patch.closeTime = after.closeTime;
   if (before.workingDays.join() !== after.workingDays.join()) patch.workingDays = after.workingDays;
+  if (changed("addressSpoken")) patch.addressSpoken = after.addressSpoken;
+  if (changed("services")) {
+    patch.services = after.services
+      .split(/[,;\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  // Exactly one centre is primary, so the flag is only ever set, never
+  // cleared here: making another centre primary is what clears this one.
+  if (changed("isPrimary") && after.isPrimary) patch.isPrimary = true;
   return patch;
 }
 
 /**
- * A centre opened inline: every field, and the stock list with its
+ * A centre opened for editing: every field, the words the agent speaks for
+ * its address, the services it offers, and the stock list with its
  * availability switches. The stock comes from `/stock` on open, because the
- * row only carries the first six items.
+ * row only carries the first six items. A location picked on the map lands
+ * in the two coordinate fields, to be saved with everything else.
  */
 export function CentreEditor({
   centre,
   canEdit,
   canEditStock,
+  picked,
   onSaved,
 }: {
   centre: CentreRow;
   canEdit: boolean;
   canEditStock: boolean;
+  picked: Location | null;
   onSaved: (centre: CentreRow) => void;
 }) {
   const t = useTranslations("centres.editor");
@@ -106,10 +127,19 @@ export function CentreEditor({
     };
   }, [centre.id]);
 
+  useEffect(() => {
+    if (!picked) return;
+    setDraft((current) => ({
+      ...current,
+      latitude: String(picked.latitude),
+      longitude: String(picked.longitude),
+    }));
+  }, [picked]);
+
   const patch = patchFrom(draftOf(centre), draft);
   const dirty = Object.keys(patch).length > 0;
 
-  const set = (key: keyof Draft) => (event: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (key: keyof Draft) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setDraft((current) => ({ ...current, [key]: event.target.value }));
 
   const save = () =>
@@ -149,25 +179,34 @@ export function CentreEditor({
   );
 
   return (
-    <div className="flex items-start gap-6 px-1">
+    <div className="flex flex-wrap items-start gap-6">
       <form
         onSubmit={(event) => {
           event.preventDefault();
           if (dirty) save();
         }}
-        className="grid flex-1 grid-cols-3 gap-3"
+        className="grid min-w-0 flex-1 basis-[560px] grid-cols-3 gap-3"
       >
         {text("name", t("name"))}
         <Field label={t("nameHi")}>
           <input lang="hi" value={draft.nameHi} onChange={set("nameHi")} disabled={!canEdit} className={inputClass} />
         </Field>
-        <div className="font-mono text-small text-muted self-end pb-2.5">{centre.code}</div>
+        <label className="flex items-center gap-2.5 self-end pb-2.5 text-body">
+          <input
+            type="checkbox"
+            checked={draft.isPrimary}
+            disabled={!canEdit || (centre.isPrimary ?? false)}
+            onChange={(event) => setDraft((current) => ({ ...current, isPrimary: event.target.checked }))}
+            className="h-4 w-4"
+          />
+          {t("primary")}
+        </label>
         {text("district", t("district"))}
         {text("block", t("block"))}
         {text("state", t("state"))}
         {text("pincode", t("pincode"), { inputMode: "numeric" })}
-        {text("latitude", t("latitude"), { inputMode: "decimal" })}
-        {text("longitude", t("longitude"), { inputMode: "decimal" })}
+        {text("latitude", t("latitude"), { inputMode: "decimal", className: `${inputClass} font-mono` })}
+        {text("longitude", t("longitude"), { inputMode: "decimal", className: `${inputClass} font-mono` })}
         <Field label={t("managerName")}>
           <input value={draft.managerName} onChange={set("managerName")} disabled={!canEdit} className={inputClass} />
         </Field>
@@ -205,6 +244,19 @@ export function CentreEditor({
             })}
           </div>
         </fieldset>
+        <Field label={t("addressSpoken")} hint={t("addressSpokenHint")} className="col-span-2">
+          <textarea
+            lang="hi"
+            value={draft.addressSpoken}
+            onChange={set("addressSpoken")}
+            disabled={!canEdit}
+            rows={2}
+            className={inputClass}
+          />
+        </Field>
+        <Field label={t("services")} hint={t("servicesHint")}>
+          <input value={draft.services} onChange={set("services")} disabled={!canEdit} className={inputClass} />
+        </Field>
         {canEdit ? (
           <div className="col-span-3 flex items-center justify-end gap-3">
             {saved ? (
@@ -224,7 +276,7 @@ export function CentreEditor({
         ) : null}
       </form>
 
-      <div className="w-[320px] shrink-0">
+      <div className="w-full xl:w-[320px] xl:shrink-0">
         <div className="mb-2 font-semibold">{t("stockTitle")}</div>
         {stock === null ? (
           <p className="text-small text-muted">{t("stockLoading")}</p>
@@ -235,9 +287,7 @@ export function CentreEditor({
             {stock.map((row) => (
               <li key={row.inventoryId} className="flex items-center justify-between gap-3 border-b border-inset py-2 text-body">
                 <div className="min-w-0">
-                  <div className="truncate font-medium">
-                    {row.productName}
-                  </div>
+                  <div className="truncate font-medium">{row.productName}</div>
                   <div className="text-label text-muted">
                     {[
                       row.variantName,

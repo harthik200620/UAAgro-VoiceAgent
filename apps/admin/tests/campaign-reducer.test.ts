@@ -14,6 +14,7 @@ const contact = (overrides: Partial<Contact> = {}): Contact => ({
   attempts: 0,
   lastAttemptAt: null,
   removedReason: null,
+  answerUrl: null,
   ...overrides,
 });
 
@@ -69,11 +70,13 @@ describe("the campaign reducer", () => {
       contact({ id: "6", status: "in_call" }),
       contact({ id: "7", status: "removed", removedReason: "dnd" }),
       contact({ id: "8" }),
+      // A ringing phone is a line in use, so it counts with the calls in progress.
+      contact({ id: "9", status: "ringing", answerUrl: "http://127.0.0.1:8080/dev/call?answer=k9" }),
     ]);
     expect(counts).toEqual({
-      total: 8,
+      total: 9,
       done: 4,
-      inCall: 1,
+      inCall: 2,
       noAnswer: 1,
       waiting: 1,
       removed: 1,

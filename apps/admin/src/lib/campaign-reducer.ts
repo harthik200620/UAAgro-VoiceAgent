@@ -67,6 +67,9 @@ export function countContacts(contacts: readonly Contact[]): CampaignCounts {
       case "done":
         counts.done += 1;
         break;
+      // A phone that is ringing is a line in use: it counts against the
+      // concurrency the same way a call in progress does.
+      case "ringing":
       case "in_call":
         counts.inCall += 1;
         break;

@@ -15,11 +15,13 @@ import {
   testCallFlow,
   updateFlow,
   type ActionResult,
+  type FlowEdit,
 } from "@/server/api";
 import { guard } from "@/server/guard";
 
 /**
- * Scripts: what the agent says, versioned.
+ * Scripts: what the agent says, versioned -- and for the helpline, the
+ * persona it says it as.
  *
  * A published version is immutable, so every edit to one becomes a new draft
  * through `/versions`; a draft is patched in place. Publishing is the one
@@ -27,11 +29,10 @@ import { guard } from "@/server/guard";
  * which is why the UI confirms first and why it is a separate capability.
  */
 
-const FLOW_PAGES = [
-  "/[locale]/(panel)/flows",
-  "/[locale]/(panel)/flows/[id]",
-  "/[locale]/(panel)/inbound/greeting",
-] as const;
+const FLOW_PAGES = ["/[locale]/(panel)/flows", "/[locale]/(panel)/flows/[id]"] as const;
+
+/** The API refuses an empty prompt or one over this many characters; so does the panel, sooner. */
+const PROMPT_MAX_CHARS = 12_000;
 
 function revalidateFlows() {
   for (const page of FLOW_PAGES) revalidatePath(page, "page");
@@ -39,20 +40,36 @@ function revalidateFlows() {
 
 type Saved = { id: string; version: number };
 
+/** The words, and the persona when it changed. `null` leaves the prompt as it is. */
+function editOf(script: FlowScript, prompt: string | null): FlowEdit {
+  return prompt === null ? { script } : { script, systemPrompt: prompt };
+}
+
+function promptProblem(prompt: string | null, wording: (key: "promptEmpty" | "promptTooLong") => string) {
+  if (prompt === null) return null;
+  if (prompt.trim() === "") return wording("promptEmpty");
+  if (prompt.length > PROMPT_MAX_CHARS) return wording("promptTooLong");
+  return null;
+}
+
 /** Edits become a new draft when the version is published, and a patch when it is not. */
 export async function saveScript(
   flowId: string,
   script: FlowScript,
   isPublished: boolean,
+  prompt: string | null,
 ): Promise<ActionResult<Saved>> {
   const t = await getTranslations("actions");
   const guarded = await guard("flows.edit");
   if (!guarded.ok) return guarded;
   const { session } = guarded;
+  const problem = promptProblem(prompt, t);
+  if (problem) return { ok: false, message: problem, code: "validation_error" };
   try {
+    const edit = editOf(script, prompt);
     const saved = isPublished
-      ? await createFlowVersion(session, flowId, { script }, randomUUID())
-      : await updateFlow(session, flowId, { script });
+      ? await createFlowVersion(session, flowId, edit, randomUUID())
+      : await updateFlow(session, flowId, edit);
     revalidateFlows();
     return { ok: true, value: { id: saved.id, version: saved.version } };
   } catch (error) {
@@ -62,24 +79,29 @@ export async function saveScript(
 
 /**
  * Publish, saving any unsaved edits first. Editing a live version and
- * publishing is therefore one click: draft vN+1, then publish it.
+ * publishing is therefore one click: draft vN+1, then publish it. The voice
+ * worker reads the published row on every call, so this is live at once.
  */
 export async function publishScript(
   flowId: string,
   script: FlowScript | null,
   isPublished: boolean,
+  prompt: string | null,
 ): Promise<ActionResult<Saved>> {
   const t = await getTranslations("actions");
   const guarded = await guard("flows.publish");
   if (!guarded.ok) return guarded;
   const { session } = guarded;
+  const problem = promptProblem(prompt, t);
+  if (problem) return { ok: false, message: problem, code: "validation_error" };
   try {
     let target = flowId;
     if (script) {
+      const edit = editOf(script, prompt);
       if (isPublished) {
-        target = (await createFlowVersion(session, flowId, { script }, randomUUID())).id;
+        target = (await createFlowVersion(session, flowId, edit, randomUUID())).id;
       } else {
-        await updateFlow(session, flowId, { script });
+        await updateFlow(session, flowId, edit);
       }
     }
     const published = await publishFlow(session, target, randomUUID());

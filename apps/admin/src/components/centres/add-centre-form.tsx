@@ -9,9 +9,11 @@ import { Field, inputClass } from "@/components/ui/field";
 import { Icon } from "@/components/ui/icon";
 
 /**
- * "Add a centre", as drawn: name, district and block, pincode and state,
- * a typed location, the manager and their number, opening hours. The code
- * comes back from the API (`NKSK-<DIST>-<n>`) and is shown on success.
+ * "Add a centre": name, district and block, pincode and state, a typed
+ * location, the manager and their number, opening hours, the address as
+ * the agent should say it, and what the centre offers. The code comes back
+ * from the API (`NKSK-<DIST>-<n>`) and is shown on success; the pin can be
+ * placed on the map afterwards by opening the centre.
  */
 export function AddCentreForm() {
   const t = useTranslations("centres.add");
@@ -55,6 +57,9 @@ export function AddCentreForm() {
           <input name="managerNumber" type="tel" placeholder="+91" className={`${inputClass} font-mono`} />
         </Field>
       </div>
+      <Field label={t("phone")}>
+        <input name="phone" type="tel" placeholder="+91" className={`${inputClass} font-mono`} />
+      </Field>
       <div className="flex gap-2.5">
         <Field label={t("opens")} className="w-1/2">
           <input name="openTime" type="time" required defaultValue="08:00" className={inputClass} />
@@ -63,6 +68,16 @@ export function AddCentreForm() {
           <input name="closeTime" type="time" required defaultValue="19:00" className={inputClass} />
         </Field>
       </div>
+      <Field label={t("addressSpoken")} hint={t("addressSpokenHint")}>
+        <textarea lang="hi" name="addressSpoken" rows={2} maxLength={400} className={inputClass} />
+      </Field>
+      <Field label={t("services")} hint={t("servicesHint")}>
+        <input name="services" className={inputClass} placeholder={t("servicesPlaceholder")} />
+      </Field>
+      <label className="flex items-center gap-2.5 text-body">
+        <input type="checkbox" name="isPrimary" className="h-4 w-4" />
+        {t("primary")}
+      </label>
 
       {state.status === "added" ? (
         <p role="status" className="text-ui text-green-text">
