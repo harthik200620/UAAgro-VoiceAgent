@@ -37,7 +37,7 @@ out/
 # must not vanish from commits.
 /data/
 /recordings/
-models/
+/models/
 fixtures/audio/*.wav
 !fixtures/audio/.gitkeep
 minio-data/
