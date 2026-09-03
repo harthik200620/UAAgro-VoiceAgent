@@ -106,11 +106,62 @@ def test_a_voice_over_the_fan_is_an_onset_and_then_an_end() -> None:
     assert gate.heard_voice_within(60.0)
 
 
+def test_a_fan_after_digital_silence_is_not_an_onset() -> None:
+    """A muted line reads as -180 dB; the fan that follows is loud, sudden and
+    flat. Loud and sudden is what a syllable is too -- flat is what it is
+    not."""
+    gate = VoiceGate()
+    zeros = np.zeros(RATE, dtype=np.float32)
+    assert feed(gate, np.concatenate([zeros, fan(3.0, rms=0.05)])) == []
+    assert gate.floor_db >= -70.0
+
+
 def test_a_click_is_not_an_onset() -> None:
     gate = VoiceGate()
     burst = quiet(0.06, rms=0.3, seed=5)
     events = feed(gate, np.concatenate([quiet(1.0), burst, quiet(1.0)]))
     assert not any(e is VoiceEvent.SPEECH_START for _, e in events)
+
+
+def test_silero_hears_a_person_and_not_a_fan() -> None:
+    """The optional model, on real speech. Skipped without the weights.
+
+    Real speech, because Silero was trained on it: the harmonic tone the
+    other tests use scores under 0.4 with it, while a synthesised Hindi
+    question scores 0.78 on average and 0.84 over a fan. The fixture is that
+    question, 1.3 s at 8 kHz.
+    """
+    from pathlib import Path
+
+    import pytest
+
+    from voice_worker.runtime.vad import SileroJudge
+
+    path = Path("models/silero_vad.onnx")
+    if not path.is_file():
+        pytest.skip("models/silero_vad.onnx not present")
+
+    clip = Path("fixtures/audio/hindi_question_8k.wav")
+    if not clip.is_file():
+        pytest.skip("fixtures/audio/hindi_question_8k.wav not present")
+    wav = clip.read_bytes()
+    speech = np.frombuffer(audio_utils.read_wav(wav), dtype="<i2").astype(np.float32) / 32768
+    background = fan(1.5 + speech.size / RATE + 1.0, rms=0.02)
+    mixed = background.copy()
+    start = int(1.5 * RATE)
+    mixed[start : start + speech.size] += speech
+
+    gate = VoiceGate(judge=SileroJudge(path))
+    events = feed(gate, mixed)
+    starts = [i for i, e in events if e is VoiceEvent.SPEECH_START]
+    assert len(starts) == 1 and 75 <= starts[0] <= 100, events
+    assert any(e is VoiceEvent.SPEECH_END for _, e in events)
+
+    quiet_gate = VoiceGate(judge=SileroJudge(path))
+    assert feed(quiet_gate, np.concatenate([quiet(1.0), fan(3.0, rms=0.05)])) == []
+    muted_gate = VoiceGate(judge=SileroJudge(path))
+    zeros = np.zeros(RATE, dtype=np.float32)
+    assert feed(muted_gate, np.concatenate([zeros, fan(3.0, rms=0.05)])) == []
 
 
 def test_the_gate_has_no_opinion_before_it_hears_anything() -> None:

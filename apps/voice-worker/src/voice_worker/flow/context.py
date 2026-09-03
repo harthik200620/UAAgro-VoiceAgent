@@ -189,11 +189,20 @@ class ConversationMemory:
         reached, or repeats itself because it thinks it was interrupted
         earlier than it was.
         """
-        for turn in reversed(self.turns):
-            if turn.role == "assistant":
-                turn.text = heard.strip() or turn.text
-                turn.interrupted = True
+        for index in range(len(self.turns) - 1, -1, -1):
+            turn = self.turns[index]
+            if turn.role != "assistant":
+                continue
+            if not heard.strip():
+                # Cut before a word went out -- the farmer added to their
+                # question while the agent was still thinking. The reply
+                # was never said, so it is not remembered as said; the two
+                # questions now sit together and are answered together.
+                del self.turns[index]
                 return
+            turn.text = heard.strip()
+            turn.interrupted = True
+            return
 
     def extend_last_assistant(self, text: str) -> None:
         """The agent picked up where it was cut off: join the two halves."""

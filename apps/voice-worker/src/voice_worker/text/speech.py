@@ -126,7 +126,7 @@ _CLAUSE_END = re.compile("[,،;]\\s+|\\s+[\u2014\u2013-]\\s+")
 #: How many words must precede a clause boundary before the opening clause
 #: is released on its own. Shared by the agent and the pipeline so the two
 #: buffers between the model and the synthesiser agree on the unit.
-FIRST_CLAUSE_WORDS = 4
+FIRST_CLAUSE_WORDS = 3
 
 #: §5.3: one idea per sentence, under about fifteen words. Longer sentences are
 #: unrecoverable when the line drops a packet.

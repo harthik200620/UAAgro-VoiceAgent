@@ -60,6 +60,7 @@ from .runtime.audio_prewarm import prewarm
 from .runtime.direction import OurNumbers
 from .runtime.repository import NullCallRepository, SqlCallRepository
 from .runtime.session import CallSession, TransportClosed
+from .runtime.vad import build_voice_gate
 from .text.catalogue_lexicon import load_lexicon
 from .text.lexicon import Lexicon
 from .text.speech import text_for_speech
@@ -243,6 +244,14 @@ async def _warm_up() -> None:
     state.retriever = HybridRetriever(embedder=E5Embedder(threads=2))
     state.embed_task = asyncio.create_task(_warm_embedder(state.retriever))
     state.registry = build_registry(lexicon=state.lexicon, retriever=state.retriever)
+
+    # The barge-in voice gate's model, if there is one. Loading the ONNX
+    # session inside the first call cost that call's greeting 1.7 s; the
+    # session is shared by every call after the first, so it is built here.
+    try:
+        build_voice_gate()
+    except Exception as exc:
+        log.warning("worker.voice_gate_warm_failed", error=type(exc).__name__)
 
     # §16.1 requires the poisoning script to come "from a cached recording",
     # so the fixed phrases are rendered up front -- but in the *background*.

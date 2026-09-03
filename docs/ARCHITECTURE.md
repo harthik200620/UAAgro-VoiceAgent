@@ -817,21 +817,55 @@ The answer is spoken in its own task now.
 | Speech-end to first audio | 3.3-3.8 s | **2.15-2.3 s** in the pipeline, 2.4-2.7 s including Soniox's endpoint | first clause released to the synthesiser; no regenerations for length; the catalogue tool finds a product *inside* a question |
 | Answer length | 6-11 s | ~5 s | 26-word cap, prompt asks for 15-20; the streaming path stops at the cap instead of regenerating |
 | Barge-in | never fired | cut **0.2 ms** after the gate's onset, 200-330 ms after the voice starts | local voice gate on the audio, answer spoken in its own task |
-| A fan over the answer | -- | ignored | stationary-sound and periodicity tests in the gate |
+| A fan over the answer | -- | ignored | Silero VAD when its weights are present, else periodicity; a stationarity test on top of either |
 | "हाँ जी" over the answer | a new reply | silence, or the rest of the interrupted answer | `pipeline.nod_after_cut`, resume from the unheard sentence |
 | "एक क्षण रुकिए" | every turn | never | removed |
 | Name in replies | every reply | greeting only | `flow/address.py`, a rule rather than a request |
 
-**Where the remaining 2.2 s is.** Roughly 0.4 s before the model is asked
-(safety and intent rules, the catalogue lookup, context), **1.2-1.4 s to the
-model's first token**, 0.2 s for the first clause's tokens, 0.3-0.5 s to the
-synthesiser's first byte. The first-token figure is the endpoint's floor: a
+**Where the remaining time is.** About 40 ms before the model is asked
+(safety and intent rules 0.1 ms, the catalogue lookup 36 ms), **1.2-1.4 s to
+the model's first token**, ~0.3 s for the first clause's tokens (three words
+and a comma; Devanagari costs ~3.5 tokens a word), 0.3-0.5 s to the
+synthesiser's first byte -- and, measured on the same afternoon, 1.5 s on
+one call in four, which is the vendor's variance and not ours. That variance
+no longer lands *between* sentences: the model is read by its own task and
+every sentence after the first is rendered the moment it exists, while the
+one before it is still playing (`_produce`, `_render_ahead`). Reading the
+model from the speaking loop had throttled it to playback -- sentence two
+was not even requested until sentence one had finished -- so every
+sentence boundary paid the synthesiser's first byte in silence. The first-token figure is the endpoint's floor: a
 ten-token prompt against `api.mwapi.dev` takes 1.1-1.5 s to answer, prompt
 caching is not honoured there (`cache_read` is never reported), and the proxy
 lists only Claude models, so there is no faster one to choose on it. A direct
 Anthropic endpoint typically answers Haiku's first token in 0.3-0.5 s, which
 is the difference between this and the brief's one second. Nothing in this
 repository can close that gap; the switch is `LLM_BASE_URL` and a key.
+
+**The voice gate runs Silero when it can.** `models/silero_vad.onnx` (v5,
+MIT, 2.3 MB, from `github.com/snakers4/silero-vad`, `src/silero_vad/data/`)
+is gitignored like the other model files, loaded once at worker start --
+loading it inside the first call cost that call's greeting 1.7 s -- and the
+startup log says which judge is running (`vad.judge`); the spectral rule
+serves without the file. On a synthesised Hindi question Silero scores 0.78
+on average and 0.84 over a fan; the fan alone scores 0.06. The harmonic tone
+the unit tests use scores under 0.4 with it -- it was trained on speech --
+so the Silero test uses a real clip, `fixtures/audio/hindi_question_8k.wav`.
+
+Its one observed weakness came out of the socket test: after a sentence and
+a stretch of digital silence the model reports **1.0 on pure zeros** and
+stays above 0.5 for the first 200 ms of a fan switched on abruptly, and the
+agent stopped for it. A fan has no pitch, so every frame Silero calls speech
+must also pass the periodicity test (at a lower bar than the spectral rule
+uses alone), the noise floor can no longer fall through the ground on
+digital silence, and an onset's own voiced frames must swing at least 6 dB
+-- a syllable does, a fan's do not.
+
+**The Hindi is the farmers' Hindi.** The persona now says so in terms: the
+English words a farmer uses every day -- रेट, स्टॉक, स्प्रे, पंप, सीड, बैग,
+सेंटर, मैनेजर, ऑफर, डिलीवरी, टाइम, प्रॉब्लम, डोज़ -- written in Devanagari so
+the synthesiser says them right, and the textbook words (उर्वरक, मूल्य,
+उपलब्ध, मात्रा, प्रतीक्षा अवधि) banned. The greeting says सेंटर; the transfer
+line says सेंटर मैनेजर.
 
 **What the browser page proved and what it cannot.** The hiss under every
 word was the page, not the voice: an 8 kHz buffer handed to a 48 kHz audio

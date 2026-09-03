@@ -37,7 +37,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
 import structlog
@@ -83,6 +83,16 @@ RELEASE_FRAMES = 15
 #: spectrum, and steady sound is never voice.
 STATIONARY_WINDOW = 25
 STATIONARY_RANGE_DB = 4.0
+#: An onset's own frames must move too. A fan switched on sounds like an
+#: onset for its first frames -- loud, sudden, and to a model trained on
+#: speech not unlike a breath -- but the frames that follow are flat within
+#: a decibel, where a syllable swings far more. Judged over the voiced
+#: frames of the onset window, so the jump from silence does not count.
+ONSET_RANGE_DB = 6.0
+#: Digital silence -- a muted microphone, a provider's comfort noise turned
+#: off -- reads as -180 dB, and a floor that followed it there would make
+#: the faintest crackle clear the room by a hundred decibels.
+FLOOR_MIN_DB = -70.0
 
 #: How fast the floor climbs back up when the room gets louder for good.
 #: Slow on purpose -- a farmer talking for three seconds must not raise the
@@ -188,6 +198,9 @@ class VoiceGate:
     floor_db: float = 0.0
 
     _recent: deque[bool] = field(default_factory=lambda: deque(maxlen=ONSET_WINDOW), repr=False)
+    _recent_levels: deque[float] = field(
+        default_factory=lambda: deque(maxlen=ONSET_WINDOW), repr=False
+    )
     _levels: deque[float] = field(
         default_factory=lambda: deque(maxlen=STATIONARY_WINDOW), repr=False
     )
@@ -199,6 +212,7 @@ class VoiceGate:
 
     def __post_init__(self) -> None:
         self._recent = deque(maxlen=self.onset_window)
+        self._recent_levels = deque(maxlen=self.onset_window)
 
     def feed(self, pcm: bytes) -> list[VoiceEvent]:
         """Judge whatever whole frames ``pcm`` completes. Never raises."""
@@ -242,9 +256,10 @@ class VoiceGate:
         else:
             self._quiet_run += 1
         self._recent.append(voiced)
+        self._recent_levels.append(level_db)
 
         if not self.speaking:
-            if sum(self._recent) >= self.onset_required:
+            if sum(self._recent) >= self.onset_required and self._onset_moves():
                 self.speaking = True
                 self._quiet_run = 0
                 return VoiceEvent.SPEECH_START
@@ -253,11 +268,24 @@ class VoiceGate:
         if self._quiet_run >= self.release_frames:
             self.speaking = False
             self._recent.clear()
+            self._recent_levels.clear()
             return VoiceEvent.SPEECH_END
         return None
 
+    def _onset_moves(self) -> bool:
+        """Whether the voiced frames of the onset window vary like speech."""
+        levels = [
+            level
+            for voiced, level in zip(self._recent, self._recent_levels, strict=False)
+            if voiced
+        ]
+        if len(levels) < 2:
+            return False
+        return (max(levels) - min(levels)) >= ONSET_RANGE_DB
+
     def _track_floor(self, level_db: float, voiced: bool) -> None:
         """Minimum statistics, the cheap way: drop at once, climb slowly."""
+        level_db = max(level_db, FLOOR_MIN_DB)
         if level_db < self.floor_db:
             self.floor_db = level_db
             return
@@ -277,6 +305,7 @@ class VoiceGate:
         """Forget the utterance state, keeping what was learned about the room."""
         self.speaking = False
         self._recent.clear()
+        self._recent_levels.clear()
         self._quiet_run = 0
         self._residue.clear()
 
@@ -288,55 +317,98 @@ class VoiceGate:
 #: Silero's 8 kHz chunk. It wants 256 samples (32 ms), not our 20 ms frame, so
 #: the judge accumulates and answers for the most recent whole chunk.
 SILERO_CHUNK = 256
+#: The v5 graph is fed the last 32 samples of the previous chunk in front of
+#: each new one -- the reference wrapper does exactly this -- so the model
+#: sees a 288-sample window and the frames overlap by 4 ms.
+SILERO_CONTEXT = 32
 SILERO_THRESHOLD = 0.5
+#: The model is far less fooled by level than the spectral rule, so it is
+#: asked to clear the room by only a little -- enough that a sound at the
+#: floor is never voice, whatever the model makes of it.
+SILERO_SNR_DB = 3.0
+#: Silero's verdict is checked against the waveform's periodicity, at a
+#: lower bar than the spectral rule uses on its own. Measured: after a
+#: sentence and a stretch of digital silence the model reports 1.0 on pure
+#: zeros and stays above 0.5 for the first 200 ms of a fan -- a sudden loud
+#: onset looks like a breath to a model trained on speech. A fan has no
+#: pitch, and this is what says so.
+SILERO_PERIODICITY_MIN = 0.3
 
 
 class SileroJudge:
     """Per-frame verdict from the Silero VAD ONNX model.
 
     Optional, and loaded only when the file exists: the weights are a download
-    (``models/silero_vad.onnx``, ~2 MB, MIT), not something to fetch quietly
-    during a call. Without them the spectral rule above stands in. Both v4 and
-    v5 graphs are handled, told apart by their input names, and a graph that
-    fails a smoke test at load is refused rather than trusted.
+    (``models/silero_vad.onnx``, ~2 MB, MIT, from
+    ``github.com/snakers4/silero-vad``, ``src/silero_vad/data/``), not
+    something to fetch quietly during a call. Without them the spectral rule
+    above stands in. Both v4 and v5 graphs are handled, told apart by their
+    input names, and a graph that fails a smoke test at load is refused rather
+    than trusted.
+
+    Measured on a synthesised Hindi question: 0.78 on average, 0.84 over a
+    fan; the fan alone 0.06. Its one observed weakness is a sudden loud onset
+    after silence, so every frame it calls speech must also show a pitch
+    (:data:`SILERO_PERIODICITY_MIN`), and the gate's stationarity and
+    onset-movement tests apply on top of either judge.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, session: Any | None = None) -> None:
         import onnxruntime
 
-        options = onnxruntime.SessionOptions()
-        options.inter_op_num_threads = 1
-        options.intra_op_num_threads = 1
-        self._session = onnxruntime.InferenceSession(
-            str(path), sess_options=options, providers=["CPUExecutionProvider"]
-        )
+        if session is None:
+            options = onnxruntime.SessionOptions()
+            options.inter_op_num_threads = 1
+            options.intra_op_num_threads = 1
+            session = onnxruntime.InferenceSession(
+                str(path), sess_options=options, providers=["CPUExecutionProvider"]
+            )
+        self._session: Any = session
         names = {entry.name for entry in self._session.get_inputs()}
         self._v5 = "state" in names
         self._state = np.zeros((2, 1, 128), dtype=np.float32)
         self._h = np.zeros((2, 1, 64), dtype=np.float32)
         self._c = np.zeros((2, 1, 64), dtype=np.float32)
+        self._context = np.zeros(SILERO_CONTEXT, dtype=np.float32)
         self._pending = np.zeros(0, dtype=np.float32)
         self._last = 0.0
+        self._window = np.hanning(JUDGE_SAMPLES).astype(np.float32)
         # Smoke test: a silent chunk must score as not-speech without error.
         self._pending = np.zeros(SILERO_CHUNK, dtype=np.float32)
         self._infer()
         self._pending = np.zeros(0, dtype=np.float32)
 
+    @property
+    def session(self) -> Any:
+        return self._session
+
+    @property
+    def probability(self) -> float:
+        """The most recent chunk's speech probability, for diagnostics."""
+        return self._last
+
     def is_voice(self, samples: np.ndarray, level_db: float, floor_db: float) -> bool:
-        if level_db < MIN_LEVEL_DB:
+        if level_db < MIN_LEVEL_DB or level_db < floor_db + SILERO_SNR_DB:
             return False
         # The judge is handed two frames; only the newest is new audio.
         frame = samples[-FRAME_SAMPLES:].astype(np.float32)
         self._pending = np.concatenate([self._pending, frame])
         while self._pending.size >= SILERO_CHUNK:
             self._infer()
-        return self._last >= SILERO_THRESHOLD
+        if self._last < SILERO_THRESHOLD:
+            return False
+        return periodicity(samples * self._window) >= SILERO_PERIODICITY_MIN
 
     def _infer(self) -> None:
         chunk = self._pending[:SILERO_CHUNK]
         self._pending = self._pending[SILERO_CHUNK:]
+        if self._v5:
+            window = np.concatenate([self._context, chunk])
+            self._context = window[-SILERO_CONTEXT:]
+        else:
+            window = chunk
         feed: dict[str, np.ndarray] = {
-            "input": chunk.reshape(1, -1),
+            "input": window.reshape(1, -1),
             "sr": np.array(audio_utils.SAMPLE_RATE, dtype=np.int64),
         }
         if self._v5:
@@ -356,6 +428,25 @@ def default_silero_path() -> Path:
     return Path(configured) if configured else Path("models") / "silero_vad.onnx"
 
 
+#: One session per process. The graph is small, but loading it per call
+#: would put file I/O and graph construction on the path of every INIT, and
+#: ONNX Runtime sessions are safe to share; the per-call state lives on the
+#: judge, which is built per call.
+_SILERO_SESSION: dict[str, Any] = {}
+
+
+def _silero_judge(path: Path) -> SileroJudge:
+    key = str(path.resolve())
+    session = _SILERO_SESSION.get(key)
+    judge = SileroJudge(path, session=session)
+    if session is None:
+        # Once per process: which detector this worker's barge-in runs on is
+        # worth one line in the startup log, not one per call.
+        log.info("vad.judge", judge="silero", path=str(path))
+    _SILERO_SESSION[key] = judge.session
+    return judge
+
+
 def build_voice_gate(model_path: Path | None = None) -> VoiceGate:
     """The gate a call uses: Silero if its weights are on disk, else spectral.
 
@@ -366,7 +457,7 @@ def build_voice_gate(model_path: Path | None = None) -> VoiceGate:
     path = model_path or default_silero_path()
     if path.is_file():
         try:
-            gate = VoiceGate(judge=SileroJudge(path))
+            gate = VoiceGate(judge=_silero_judge(path))
             log.debug("vad.silero", path=str(path))
             return gate
         except Exception as exc:
@@ -376,11 +467,14 @@ def build_voice_gate(model_path: Path | None = None) -> VoiceGate:
 
 __all__ = (
     "FLATNESS_MAX",
+    "FLOOR_MIN_DB",
     "JUDGE_SAMPLES",
+    "ONSET_RANGE_DB",
     "ONSET_REQUIRED",
     "ONSET_WINDOW",
     "PERIODICITY_MIN",
     "RELEASE_FRAMES",
+    "SILERO_PERIODICITY_MIN",
     "SNR_DB",
     "STATIONARY_RANGE_DB",
     "STATIONARY_WINDOW",

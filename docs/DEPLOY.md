@@ -125,3 +125,18 @@ call page a minute after hang-up. That call is §21's Phase 5 gate;
 - **Certificates** are Caddy's job and need ports 80 and 443 open to the world.
 - **The Bakbak voice ids** (`BAKBAK_VOICE_HI`, `BAKBAK_VOICE_EN`) are chosen in
   the §21 Phase 2 bake-off, not from documentation.
+
+## Model files
+
+Three files live under `models/`, which is gitignored; each is fetched once
+per host and mounted or copied into the worker's working directory:
+
+| file | what | from |
+|---|---|---|
+| `models/multilingual-e5-base/` | the retrieval embedder (§9) | `uv run huggingface-cli download intfloat/multilingual-e5-base` |
+| `models/smart-turn-v3.1.onnx` | Smart Turn, for routes without vendor endpointing (§5.2) | `uv run huggingface-cli download pipecat-ai/smart-turn-v3` |
+| `models/silero_vad.onnx` | Silero VAD v5, the barge-in voice gate (§5.4) — optional | `github.com/snakers4/silero-vad`, `src/silero_vad/data/silero_vad.onnx` (MIT, 2.3 MB) |
+
+Without the Silero file the gate falls back to its spectral rule and says so
+at startup (`vad.judge` is absent). With it, `vad.judge judge=silero` appears
+once when the first call is built.

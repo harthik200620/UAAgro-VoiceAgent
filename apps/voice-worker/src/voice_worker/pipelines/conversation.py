@@ -92,8 +92,9 @@ RESUME_WATCHDOG_MAX_S = 6.0
 MIN_WORDS_TO_INTERRUPT_LATE = 3
 
 #: The opening clause is released to the synthesiser once this many words
-#: precede a comma. Set on the first sentence of every turn.
-FIRST_CLAUSE_WORDS = 4
+#: precede a comma. Set on the first sentence of every turn. Three, because
+#: Devanagari costs ~3.5 tokens a word and every word waited for is ~60 ms.
+FIRST_CLAUSE_WORDS = 3
 
 #: A sentence the farmer heard at least this much of is not repeated when
 #: the agent resumes; anything less is spoken again from the start.
@@ -223,6 +224,11 @@ class ConversationPipeline:
     #: Sentences of an interrupted answer the farmer has not heard.
     _resumable: list[str] = field(default_factory=list, repr=False)
     _resume_watchdog: asyncio.Task[None] | None = field(default=None, repr=False)
+    #: Sentences being rendered ahead of their turn to be spoken, by
+    #: speakable text. The synthesiser's first byte is 300 ms on a good call
+    #: and 1.5 s on a bad one, and paying it *between* sentences put that
+    #: much silence in the middle of every answer.
+    _ahead: dict[str, asyncio.Task[bytes | None]] = field(default_factory=dict, repr=False)
     _partial_since_cut: bool = False
     #: The current recognition began by interrupting the agent. Decides
     #: what a bare "हाँ" means when it arrives.
@@ -759,69 +765,93 @@ class ConversationPipeline:
         clause* even earlier means the pause before the agent speaks is the
         cost of a few words rather than of a sentence.
 
-        After an interruption the source is still read, briefly, so the part
+        The model is read by its own task. Reading it from the speaking loop
+        meant the model was throttled to playback: sentence two was not even
+        requested until sentence one had finished playing, so every sentence
+        boundary paid the synthesiser's first byte in silence. Now every
+        sentence after the first is rendered the moment it exists, while the
+        one before it is still playing.
+
+        After an interruption the producer is still read, briefly, so the part
         the farmer did not hear is known and can be resumed.
         """
-        buffer = SentenceBuffer(first_clause_words=FIRST_CLAUSE_WORDS)
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        producer = asyncio.create_task(self._produce(source, queue, metrics))
         spoken: list[str] = []
         unspoken: list[str] = []
         self._begin_playback()
-        iterator = source.__aiter__()
-        drain_deadline: float | None = None
+        cut_at: float | None = None
 
         try:
             while True:
-                if drain_deadline is not None:
-                    budget = drain_deadline - time.perf_counter()
+                if cut_at is None:
+                    sentence = await queue.get()
+                else:
+                    budget = cut_at + REMAINDER_DRAIN_S - time.perf_counter()
                     if budget <= 0:
                         break
                     try:
-                        fragment = await asyncio.wait_for(iterator.__anext__(), timeout=budget)
+                        sentence = await asyncio.wait_for(queue.get(), timeout=budget)
                     except TimeoutError:
                         break
-                    except StopAsyncIteration:
-                        break
-                else:
-                    try:
-                        fragment = await iterator.__anext__()
-                    except StopAsyncIteration:
-                        break
-
-                if metrics.first_token_at is None:
-                    metrics.mark("first_token_at")
-                for sentence in buffer.add(fragment):
-                    if drain_deadline is not None:
-                        unspoken.append(sentence)
-                        continue
-                    if await self._speak_sentence(sentence, metrics, outcome):
-                        spoken.append(sentence)
-                        continue
+                if sentence is None:
+                    break
+                if cut_at is not None:
                     unspoken.append(sentence)
-                    drain_deadline = time.perf_counter() + REMAINDER_DRAIN_S
-
-            # The tail: an answer whose last sentence carries no terminator is
-            # still an answer, and dropping it would truncate mid-thought.
-            for sentence in buffer.flush():
-                said = drain_deadline is None and await self._speak_sentence(
-                    sentence, metrics, outcome
-                )
-                if said:
+                    continue
+                if await self._speak_sentence(sentence, metrics, outcome):
                     spoken.append(sentence)
-                else:
-                    unspoken.append(sentence)
-                    drain_deadline = drain_deadline or time.perf_counter()
-            if drain_deadline is None:
+                    continue
+                unspoken.append(sentence)
+                cut_at = time.perf_counter()
+            if cut_at is None:
                 metrics.mark("audio_sent_at")
         finally:
-            with contextlib.suppress(Exception):
-                aclose = getattr(iterator, "aclose", None)
-                if aclose is not None:
-                    await aclose()
+            if not producer.done():
+                producer.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await producer
+            self._cancel_ahead()
             # `outcome.response` is what the agent *intended* to say: the
             # sentences spoken plus the ones drained after the cut. What the
             # caller *heard* is `outcome.spoken`, which the tracker computes.
             outcome.response = " ".join([*spoken, *unspoken]).strip()
             self._end_playback(outcome)
+
+    async def _produce(
+        self, source: AsyncIterator[str], queue: asyncio.Queue[str | None], metrics: TurnMetrics
+    ) -> None:
+        """Read the model into sentences; render every one after the first."""
+        buffer = SentenceBuffer(first_clause_words=FIRST_CLAUSE_WORDS)
+        count = 0
+
+        def release(sentence: str) -> None:
+            nonlocal count
+            count += 1
+            if count > 1:
+                self._render_ahead(sentence)
+            queue.put_nowait(sentence)
+
+        try:
+            async for fragment in source:
+                if metrics.first_token_at is None:
+                    metrics.mark("first_token_at")
+                for sentence in buffer.add(fragment):
+                    release(sentence)
+            # The tail: an answer whose last sentence carries no terminator is
+            # still an answer, and dropping it would truncate mid-thought.
+            for sentence in buffer.flush():
+                release(sentence)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("pipeline.generation_failed", error=type(exc).__name__)
+        finally:
+            queue.put_nowait(None)
+            with contextlib.suppress(Exception):
+                aclose = getattr(source, "aclose", None)
+                if aclose is not None:
+                    await aclose()
 
     def _begin_playback(self) -> None:
         """Open a speaking turn. Shared by the streaming and complete paths."""
@@ -875,6 +905,54 @@ class ConversationPipeline:
             return sentences[index:]
         return []
 
+    def _render_ahead(self, sentence: str) -> None:
+        """Start synthesising a sentence that will be spoken after the current one.
+
+        The model produces sentence two while sentence one is being spoken,
+        and sentence one takes seconds to play. Rendering two in that time
+        turns the synthesiser's first byte from a pause the farmer hears into
+        one nobody does. Bounded by the answer: `_cancel_ahead` stops anything
+        still in flight when the turn ends or is interrupted.
+        """
+        speakable = text_for_speech(sentence, language=self.stack.tts_config.language)
+        if not speakable or speakable in self._ahead:
+            return
+        self._ahead[speakable] = asyncio.create_task(self._render(speakable))
+
+    async def _render(self, speakable: str) -> bytes | None:
+        try:
+            cached = await self.cache.get(
+                speakable, self.stack.tts_config, provider=self.stack.tts.provider
+            )
+            if cached is not None:
+                return cached
+            audio = await self.stack.tts.synthesise_all(speakable, self.stack.tts_config)
+            if audio:
+                await self.cache.put(
+                    speakable, self.stack.tts_config, audio, provider=self.stack.tts.provider
+                )
+            return audio or None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.debug("pipeline.render_ahead_failed", error=type(exc).__name__)
+            return None
+
+    async def _rendered_ahead(self, speakable: str) -> bytes | None:
+        """The audio of a sentence rendered ahead, waiting for it if need be."""
+        task = self._ahead.pop(speakable, None)
+        if task is None:
+            return None
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            return await task
+        return None
+
+    def _cancel_ahead(self) -> None:
+        for task in self._ahead.values():
+            if not task.done():
+                task.cancel()
+        self._ahead.clear()
+
     async def _speak_sentence(
         self, sentence: str, metrics: TurnMetrics, outcome: TurnOutcome
     ) -> bool:
@@ -904,9 +982,11 @@ class ConversationPipeline:
         if metrics.synthesis_started_at is None:
             metrics.mark("synthesis_started_at")
 
-        cached = await self.cache.get(
-            speakable, self.stack.tts_config, provider=self.stack.tts.provider
-        )
+        cached = await self._rendered_ahead(speakable)
+        if cached is None:
+            cached = await self.cache.get(
+                speakable, self.stack.tts_config, provider=self.stack.tts.provider
+            )
         if cached is not None:
             metrics.from_cache = metrics.from_cache or False
             if metrics.first_audio_at is None:
@@ -963,11 +1043,15 @@ class ConversationPipeline:
 
         self._begin_playback()
         try:
-            for sentence in split_sentences(response):
+            sentences = split_sentences(response)
+            for later in sentences[1:]:
+                self._render_ahead(later)
+            for sentence in sentences:
                 if not await self._speak_sentence(sentence, metrics, outcome):
                     break
             metrics.mark("audio_sent_at")
         finally:
+            self._cancel_ahead()
             self._end_playback(outcome)
 
     async def _synthesise(self, text: str) -> bytes:
@@ -1022,6 +1106,7 @@ class ConversationPipeline:
     async def close(self) -> None:
         self._closed = True
         self._cancel_resume_watchdog()
+        self._cancel_ahead()
         await self._discard_speculation("call ended")
         for task in (self._answer_task, self._opening_task):
             if task is not None and not task.done():

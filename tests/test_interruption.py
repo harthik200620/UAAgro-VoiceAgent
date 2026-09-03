@@ -75,12 +75,15 @@ class ToneTTS(TTSService):
 
     provider = "tone"
 
-    def __init__(self, ms: int = 400) -> None:
+    def __init__(self, ms: int = 400, *, first_byte_s: float = 0.0) -> None:
         self.ms = ms
+        self.first_byte_s = first_byte_s
         self.requests: list[str] = []
 
     async def synthesise(self, text: str, config: TtsConfig) -> AsyncIterator[TtsChunk]:
         self.requests.append(text)
+        if self.first_byte_s:
+            await asyncio.sleep(self.first_byte_s)
         audio = audio_utils.tone(440, self.ms)
         step = audio_utils.FRAME_BYTES * 3
         first = True
@@ -133,10 +136,11 @@ class Harness:
         *,
         gate: VoiceGate | None = None,
         tts_ms: int = 400,
+        tts_first_byte_s: float = 0.0,
     ) -> None:
         defaults = get_defaults()
         base = build_speech_stack("hi-IN", Settings(), defaults)
-        self.tts = ToneTTS(tts_ms)
+        self.tts = ToneTTS(tts_ms, first_byte_s=tts_first_byte_s)
         self.stt = TimedSTT(script)
         self.sent: list[bytes] = []
         self.cleared = 0
@@ -300,6 +304,24 @@ async def test_nothing_is_said_while_the_model_is_slow() -> None:
 
     assert h.tts.requests == [text_for_speech(S1)]
     assert h.played() == [text_for_speech(S1)]
+
+
+async def test_the_next_sentence_is_rendered_while_this_one_plays() -> None:
+    """Three sentences of 400 ms, a synthesiser that takes 300 ms to its first
+    byte. Paid at every boundary that is 2.1 s; paid once, with the later
+    sentences rendered while the first plays, it is about 1.5 s. The model
+    hands over its sentences 50 ms apart, as a fast stream would."""
+    responder = Responder([S1, S2, S3], gap_s=0.05)
+    started = asyncio.get_running_loop().time()
+    async with Harness(
+        [(0.0, end(QUESTION))], responder, tts_first_byte_s=0.3
+    ) as h:
+        pass
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert h.played() == [text_for_speech(S1), text_for_speech(S2), text_for_speech(S3)]
+    assert h.tts.requests.count(text_for_speech(S3)) == 1
+    assert elapsed < 1.85, f"the answer took {elapsed:.2f}s: sentences waited on the synthesiser"
 
 
 async def test_speculation_streams_and_pre_renders_its_first_sentence() -> None:
