@@ -143,9 +143,7 @@ async def test_the_pipeline_runs_every_stage(sessions, call_id) -> None:  # type
     assert not report.failed, report.summary()
 
 
-async def test_a_failing_stage_does_not_stop_the_others(
-    sessions, call_id
-) -> None:  # type: ignore[no-untyped-def]
+async def test_a_failing_stage_does_not_stop_the_others(sessions, call_id) -> None:  # type: ignore[no-untyped-def]
     """§11.5's inversion: the call already happened, so partial enrichment
     beats none. A summariser that raises must not also cost the operator the
     cost figures and the ticket."""
@@ -163,9 +161,7 @@ async def test_a_failing_stage_does_not_stop_the_others(
     assert {"farmer", "notify"} <= {s.name for s in report.stages if s.ok}
 
 
-async def test_running_twice_does_not_double_the_ticket(
-    sessions, call_id, app_engine
-) -> None:  # type: ignore[no-untyped-def]
+async def test_running_twice_does_not_double_the_ticket(sessions, call_id, app_engine) -> None:  # type: ignore[no-untyped-def]
     """ARQ retries, so every stage runs more than once in production. A second
     callback ticket means a farmer is called back twice about one thing."""
 
@@ -189,9 +185,7 @@ async def test_running_twice_does_not_double_the_ticket(
     assert count == 1, f"{count} tickets after three runs"
 
 
-async def test_a_resolved_call_gets_no_ticket(
-    sessions, call_id, app_engine
-) -> None:  # type: ignore[no-untyped-def]
+async def test_a_resolved_call_gets_no_ticket(sessions, call_id, app_engine) -> None:  # type: ignore[no-untyped-def]
     """A ticket per call would bury the ones that need work."""
 
     session = await sessions()
@@ -212,15 +206,12 @@ async def test_a_resolved_call_gets_no_ticket(
     assert count == 0
 
 
-async def test_the_cost_total_is_computed_from_its_components(
-    sessions, call_id
-) -> None:  # type: ignore[no-untyped-def]
+async def test_the_cost_total_is_computed_from_its_components(sessions, call_id) -> None:  # type: ignore[no-untyped-def]
     """§8. A total stored without its breakdown cannot be checked, and a
     breakdown without a total has to be summed on every dashboard render."""
     session = await sessions()
     await postcall.run(session, call_id)
     await session.commit()
-
 
     session = await sessions()
     call = await _load_call(session, call_id)
@@ -232,9 +223,7 @@ async def test_the_cost_total_is_computed_from_its_components(
     assert call.cost_breakdown["total"] == pytest.approx(6.1)
 
 
-async def test_an_outcome_is_never_guessed_as_a_system_failure(
-    sessions, call_id
-) -> None:  # type: ignore[no-untyped-def]
+async def test_an_outcome_is_never_guessed_as_a_system_failure(sessions, call_id) -> None:  # type: ignore[no-untyped-def]
     """A call that simply stopped is the caller hanging up. Recording it as a
     system failure would inflate the failed-call tile §15 shows and send
     somebody chasing an incident that never happened."""
@@ -242,16 +231,13 @@ async def test_an_outcome_is_never_guessed_as_a_system_failure(
     await postcall.run(session, call_id)
     await session.commit()
 
-
     session = await sessions()
     call = await _load_call(session, call_id)
     assert call is not None
     assert call.outcome is CallOutcome.CALLER_HUNG_UP
 
 
-async def test_the_farmer_language_is_persisted(
-    sessions, call_id
-) -> None:  # type: ignore[no-untyped-def]
+async def test_the_farmer_language_is_persisted(sessions, call_id) -> None:  # type: ignore[no-untyped-def]
     """§11.5. The next call starts in the right language instead of guessing
     again -- the difference between being recognised and being re-interrogated.
     """
@@ -433,3 +419,159 @@ def test_the_retry_policy_is_shared_with_the_gate() -> None:
     now = datetime.now(UTC)
     assert schedule_retry("opted_out", last_attempt=now, attempts=0) is None
     assert schedule_retry("busy", last_attempt=now, attempts=1) is not None
+
+
+# --------------------------------------------------------------------------- #
+# §11.5 -- the summary and the recording
+# --------------------------------------------------------------------------- #
+
+
+class _ScriptedGateway:
+    """Streams a fixed answer in pieces, the way the §6.1 gateway does."""
+
+    def __init__(self, answer: str) -> None:
+        self.answer = answer
+        self.requests: list[tuple[list[str], str, int | None]] = []
+
+    async def stream(  # type: ignore[no-untyped-def]
+        self,
+        *,
+        system_blocks,
+        user_message,
+        cacheable_prefix="",
+        max_tokens=None,
+        temperature=None,
+    ):
+        self.requests.append((list(system_blocks), user_message, max_tokens))
+        for piece in self.answer.split("|"):
+            yield piece, "primary"
+
+
+async def test_the_summariser_writes_two_lines_and_never_a_phone_number() -> None:
+    """§23-6: whatever the model was told, a number does not leave here."""
+    from uaagro_domain.settings import Settings
+    from worker import summary
+
+    gateway = _ScriptedGateway(
+        "Hindi: किसान ने 50 किलो डीएपी का रेट पूछा, 1250 रुपये बताया; "
+        "9876543210 पर कॉलबैक।|\nEnglish: Farmer asked the DAP rate; told 1250; "
+        "callback on +91 98765 43210."
+    )
+    summarise = summary.build_summariser(Settings(), gateway=gateway)
+    hindi, english = await summarise("user: डीएपी का रेट\nassistant: 1250 रुपये", "hi-IN")
+
+    assert hindi.startswith("किसान ने 50 किलो")
+    assert "1250" in hindi and "9876543210" not in hindi
+    assert english.startswith("Farmer asked")
+    assert "43210" not in english
+    system, user, max_tokens = gateway.requests[0]
+    assert system == [summary.SYSTEM_PROMPT]
+    assert "डीएपी का रेट" in user
+    assert max_tokens == summary.MAX_SUMMARY_TOKENS
+
+
+async def test_process_call_runs_the_summariser_on_the_transcript(
+    embedded_pg, sessions, call_id, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """The job passes a real summariser; the row carries what it wrote."""
+    from uaagro_db.engine import dispose_engines
+    from uaagro_db.models import CallTurn
+    from uaagro_domain.enums import TurnRole
+    from uaagro_domain.livefeed import NullLiveFeed
+    from uaagro_domain.settings import get_settings
+    from worker import summary, tasks
+
+    monkeypatch.setenv("DATABASE_URL", embedded_pg.app_dsn)
+    get_settings.cache_clear()
+    await dispose_engines()
+
+    async def fake(transcript: str, language: str) -> tuple[str, str]:
+        assert "डीएपी" in transcript
+        return "किसान ने डीएपी का रेट पूछा।", "Farmer asked the DAP rate."
+
+    monkeypatch.setattr(summary, "build_summariser", lambda settings: fake)
+    monkeypatch.setattr(tasks, "live_feed", NullLiveFeed)
+
+    session = await sessions()
+    call = await _load_call(session, call_id)
+    assert call is not None
+    session.add_all(
+        [
+            CallTurn(
+                call_id=call.id,
+                started_at=call.started_at,
+                centre_id=call.centre_id,
+                turn_index=index,
+                role=role,
+                text_original=said,
+            )
+            for index, role, said in (
+                (0, TurnRole.USER, "डीएपी का रेट क्या है"),
+                (1, TurnRole.ASSISTANT, "1250 रुपये बोरी।"),
+            )
+        ]
+    )
+    await session.commit()
+
+    try:
+        outcome = await tasks.process_call({}, str(call_id))
+        assert "failed" not in outcome
+        session = await sessions()
+        call = await _load_call(session, call_id)
+        assert call is not None
+        assert call.summary_hi == "किसान ने डीएपी का रेट पूछा।"
+        assert call.summary_en == "Farmer asked the DAP rate."
+    finally:
+        session = await sessions()
+        await session.execute(text("DELETE FROM call_turns WHERE call_id = :c"), {"c": call_id})
+        await session.commit()
+        get_settings.cache_clear()
+        await dispose_engines()
+
+
+async def test_the_recording_stage_reports_what_the_worker_stored(sessions, call_id) -> None:  # type: ignore[no-untyped-def]
+    """The media path stores the audio itself; the job only says whether it did."""
+    session = await sessions()
+    report = await postcall.run(session, call_id)
+    stage = next(s for s in report.stages if s.name == "recording")
+    assert stage.ok and stage.detail == "no recording"
+
+    call = await _load_call(session, call_id)
+    assert call is not None
+    call.recording_object_key = "recordings/2026/09/03/TEST.wav"
+    await session.commit()
+
+    session = await sessions()
+    report = await postcall.run(session, call_id)
+    stage = next(s for s in report.stages if s.name == "recording")
+    assert stage.ok and stage.detail == "stored by the worker"
+    # Reported by presence, never by value (§23-6).
+    assert "recordings/" not in stage.detail
+
+
+# --------------------------------------------------------------------------- #
+# The heartbeat the panel reads
+# --------------------------------------------------------------------------- #
+
+
+async def test_the_heartbeat_is_written_with_a_ttl_and_scheduled_every_minute() -> None:
+    from api.services import jobs
+    from worker import tasks
+
+    written: list[tuple[str, str, int | None]] = []
+
+    class _Redis:
+        async def set(self, key: str, value: str, ex: int | None = None) -> None:
+            written.append((key, value, ex))
+
+    assert await tasks.worker_heartbeat({"redis": _Redis()}) == ""
+    key, value, ttl = written[0]
+    assert key == tasks.HEARTBEAT_KEY == jobs.HEARTBEAT_KEY
+    assert ttl == tasks.HEARTBEAT_TTL_S == jobs.HEARTBEAT_TTL_S
+    assert datetime.fromisoformat(value).tzinfo is not None
+
+    beat = next(
+        job for job in tasks.WorkerSettings.cron_jobs if job.coroutine is tasks.worker_heartbeat
+    )
+    assert beat.minute == set(range(60))
+    assert tasks.worker_heartbeat in tasks.WorkerSettings.functions

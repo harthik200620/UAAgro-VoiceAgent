@@ -260,7 +260,36 @@ async def _seed_centres(
         else:
             report.note("centres", created=False)
         out[entry.code] = existing
+    await _ensure_primary_centre(session, org=org, centres=out)
     return out
+
+
+#: The head office. The helpline answers stock and price for this centre when
+#: the caller's own centre is unknown (migration 0009).
+PRIMARY_CENTRE_CODE = "NKSK-LKO-01"
+
+
+async def _ensure_primary_centre(
+    session: AsyncSession, *, org: Organization, centres: dict[str, Centre]
+) -> None:
+    """Mark the seed's head office primary when nothing is yet.
+
+    Only when nothing is: an operator who moved the flag to another centre in
+    the panel keeps their choice on the next ``make dev``, and the partial
+    unique index would refuse a second primary anyway.
+    """
+    current = await session.scalar(
+        select(Centre.id).where(
+            Centre.organization_id == org.id,
+            Centre.is_primary.is_(True),
+            Centre.deleted_at.is_(None),
+        )
+    )
+    head_office = centres.get(PRIMARY_CENTRE_CODE)
+    if current is not None or head_office is None:
+        return
+    head_office.is_primary = True
+    await session.flush()
 
 
 async def _seed_users(
@@ -945,8 +974,13 @@ async def _seed_orders(
                 # from the status rather than sprinkled at random.
                 promised_date=(
                     (placed + timedelta(days=promised_offset)).date()
-                    if status in (OrderStatus.DISPATCHED, OrderStatus.CONFIRMED,
-                                  OrderStatus.PACKED, OrderStatus.READY_FOR_PICKUP)
+                    if status
+                    in (
+                        OrderStatus.DISPATCHED,
+                        OrderStatus.CONFIRMED,
+                        OrderStatus.PACKED,
+                        OrderStatus.READY_FOR_PICKUP,
+                    )
                     else None
                 ),
                 delivered_at=(

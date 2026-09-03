@@ -14,6 +14,18 @@ members = [
 ]
 
 [[package]]
+name = "aiomysql"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pymysql" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/29/e0/302aeffe8d90853556f47f3106b89c16cc2ec2a4d269bdfd82e3f4ae12cc/aiomysql-0.3.2.tar.gz", hash = "sha256:72d15ef5cfc34c03468eb41e1b90adb9fd9347b0b589114bd23ead569a02ac1a", size = 108311, upload-time = "2025-10-22T00:15:21.278Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/af/aae0153c3e28712adaf462328f6c7a3c196a1c1c27b491de4377dd3e6b52/aiomysql-0.3.2-py3-none-any.whl", hash = "sha256:c82c5ba04137d7afd5c693a258bea8ead2aad77101668044143a991e04632eb2", size = 71834, upload-time = "2025-10-22T00:15:15.905Z" },
+]
+
+[[package]]
 name = "alembic"
 version = "1.19.1"
 source = { registry = "https://pypi.org/simple" }
@@ -768,6 +780,24 @@ wheels = [
 ]
 
 [[package]]
+name = "mysql-mimic"
+version = "3.0.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sqlglot" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/22/fb/212b50fa638437e04dcd8501316525ec59b09e5d3cdab6627f9cf1a0c4c1/mysql_mimic-3.0.4.tar.gz", hash = "sha256:27f18b2790b24a3fbd4e6d8ed3172b538cd2545847861db10a992cfe7fcbc641", size = 57547, upload-time = "2026-05-05T20:58:22.086Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/bf/ada2ef41fc1549feb20082fa09950068e752078709f012fe28cab68b5406/mysql_mimic-3.0.4-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:90cf1000c2a12974f20d2a06b8ff6540d37b6350b572cadd4b6f538342b9007a", size = 414377, upload-time = "2026-05-05T20:57:44.208Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/99/64ae0bfdeb9a84a989f8024fce4ea7c26a79d3cc27cddf0eb172b10d154c/mysql_mimic-3.0.4-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:cedc016f0e59c5beba8f15f3e36e1596bf7433b9e3d1c3021d1a572dfa621e0c", size = 395784, upload-time = "2026-05-05T20:57:45.88Z" },
+    { url = "https://files.pythonhosted.org/packages/98/73/91a909b4862fc50fa6435a6994d90f9db25ad549acba8abab5ac3363baaf/mysql_mimic-3.0.4-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:74548f8d44adaf8962fc337fabcbb3df86cde2696b49391969c25dc12d78520f", size = 598466, upload-time = "2026-05-05T20:57:47.5Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/5e/8e8eeee9a7dcfb107e6ff74022c74a6d48a5177786d188e1da312639f07f/mysql_mimic-3.0.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:41652c20ca9f6ba3352225218274b5e539b55ca4f2f50872133261bec96da78f", size = 620496, upload-time = "2026-05-05T20:57:48.717Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/84/f453712ab3a12ca5bd0d40154b055b1a73ab115c1316dfe46be24125f4c4/mysql_mimic-3.0.4-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:9331043e7fa85d33b5d119dc41b7502ca1a8f8f8f069b895a4f48668b249e6cf", size = 609792, upload-time = "2026-05-05T20:57:50.275Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/2a/d14ddd8fca1bdf7e44e51d6a9eac989f4f1a3b04fab64969a64b7e608855/mysql_mimic-3.0.4-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:a92266958fe7345b5303dbc3526c41bfae05cc88c0812d1226dcf7609fb971f6", size = 616569, upload-time = "2026-05-05T20:57:51.54Z" },
+    { url = "https://files.pythonhosted.org/packages/24/b1/1a923f7f3d8c2f36e4493e48315b926b85e4eb24077aa7748a1e901644cc/mysql_mimic-3.0.4-cp312-cp312-win_amd64.whl", hash = "sha256:97a00dbd8e8e7b31865866d14263a87db99c019b85a81af8f8850435bb028332", size = 264423, upload-time = "2026-05-05T20:57:52.718Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.5.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1123,6 +1153,15 @@ crypto = [
 ]
 
 [[package]]
+name = "pymysql"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/bc/1c6a92f385940f727daeecf3bacaf186e03875dff57197801046c583bcf0/pymysql-1.2.0.tar.gz", hash = "sha256:6c7b17ca686988104d7426c27895b455cdeea3e9d3ceb1270f0c3704fead8c33", size = 49021, upload-time = "2026-05-19T08:26:22.302Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/bd/2534e130295c8cfd4f0a2e31623baab7502278f1e97bcfe61db75656a77f/pymysql-1.2.0-py3-none-any.whl", hash = "sha256:62169ce6d5510f08e140c5e7990ee884a9764024e4a9a27b2cc11f1099322ae0", size = 45716, upload-time = "2026-05-19T08:26:20.974Z" },
+]
+
+[[package]]
 name = "pyotp"
 version = "2.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1351,6 +1390,15 @@ asyncio = [
 ]
 
 [[package]]
+name = "sqlglot"
+version = "30.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/d4/da49abcc81beebbb25f29ddf87f2980c63c949569d7f2da40c06d95fa415/sqlglot-30.17.0.tar.gz", hash = "sha256:2d6b8def93304fa300f4d20f48e3909e7f436fda56ca1fafd8975f6c561ef62c", size = 5999019, upload-time = "2026-08-12T19:36:50.587Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f3/bc/2a07cef49046e6cf5d1a8b1de553aaef8491b4170dbfe254c8687c764408/sqlglot-30.17.0-py3-none-any.whl", hash = "sha256:84435ac283a60173da31b5fd7d11a725037a1c3fd6ed1e21fb065de74ddb579f", size = 741795, upload-time = "2026-08-12T19:36:48.699Z" },
+]
+
+[[package]]
 name = "starlette"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1455,6 +1503,7 @@ name = "uaagro-api"
 version = "0.1.0"
 source = { editable = "apps/api" }
 dependencies = [
+    { name = "aiomysql" },
     { name = "argon2-cffi" },
     { name = "arq" },
     { name = "email-validator" },
@@ -1481,6 +1530,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiomysql", specifier = ">=0.2" },
     { name = "argon2-cffi", specifier = ">=23.1" },
     { name = "arq", specifier = ">=0.26" },
     { name = "email-validator", specifier = ">=2.2" },
@@ -1602,6 +1652,7 @@ dev = [
     { name = "httpx" },
     { name = "hypothesis" },
     { name = "mypy" },
+    { name = "mysql-mimic" },
     { name = "pgserver" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1627,6 +1678,7 @@ dev = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "hypothesis", specifier = ">=6.123" },
     { name = "mypy", specifier = ">=1.14" },
+    { name = "mysql-mimic", specifier = ">=2.4" },
     { name = "pgserver", specifier = ">=0.1.4" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=0.25" },
@@ -1689,6 +1741,7 @@ name = "uaagro-worker"
 version = "0.1.0"
 source = { editable = "apps/worker" }
 dependencies = [
+    { name = "aiomysql" },
     { name = "arq" },
     { name = "httpx" },
     { name = "opentelemetry-exporter-otlp-proto-grpc" },
@@ -1698,13 +1751,16 @@ dependencies = [
     { name = "prometheus-client" },
     { name = "redis" },
     { name = "structlog" },
+    { name = "uaagro-api" },
     { name = "uaagro-db" },
     { name = "uaagro-domain" },
+    { name = "uaagro-voice-worker" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "aiomysql", specifier = ">=0.2" },
     { name = "arq", specifier = ">=0.26" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.29" },
@@ -1714,8 +1770,10 @@ requires-dist = [
     { name = "prometheus-client", specifier = ">=0.21" },
     { name = "redis", specifier = ">=5.2" },
     { name = "structlog", specifier = ">=24.4" },
+    { name = "uaagro-api", editable = "apps/api" },
     { name = "uaagro-db", editable = "packages/db" },
     { name = "uaagro-domain", editable = "packages/domain" },
+    { name = "uaagro-voice-worker", editable = "apps/voice-worker" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21" },
 ]
 

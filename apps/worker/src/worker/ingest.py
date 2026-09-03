@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uaagro_db.models import Crop, KbDocument, Product
-from uaagro_db.storage import ObjectStore
+from uaagro_db.storage import object_store
 from uaagro_domain.errors import UAAgroError
 from voice_worker.knowledge.embeddings import E5Embedder
 from voice_worker.knowledge.extract import DEFAULT_MAX_PAGES, extract_file, fetch_site
@@ -108,6 +108,13 @@ async def ingest_pending_document(session: AsyncSession, document_id: uuid.UUID)
     document.ingest_status = "indexed"
     document.ingest_error = None
     document.page_count = page_count
+    # What was actually read, for the panel: a scan that produced forty
+    # chunks of twelve words is visible as such. A crawl has no upload to
+    # measure, so its size is the text it yielded.
+    document.word_count = len(markdown.split())
+    if document.size_bytes is None:
+        document.size_bytes = len(markdown.encode("utf-8"))
+    document.indexed_at = datetime.now(UTC)
     document.approved_by_user_id = document.uploaded_by_user_id
     document.approved_at = datetime.now(UTC)
     document.is_published = True
@@ -125,7 +132,7 @@ async def _content_of(document: KbDocument) -> tuple[str, int | None]:
         return extracted.markdown, extracted.page_count
     if not document.file_key:
         raise ValueError("the uploaded file is missing")
-    data = await ObjectStore().get(document.file_key)
+    data = await object_store().get(document.file_key)
     extracted = await asyncio.to_thread(
         extract_file, data, filename=document.source or document.file_key
     )

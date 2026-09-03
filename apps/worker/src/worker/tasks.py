@@ -36,6 +36,8 @@ from uaagro_domain.settings import get_defaults, get_settings
 from uaagro_domain.telemetry import INSTRUMENTS
 from uaagro_domain.timezone import now_ist
 
+from .sync import run_scheduled_syncs
+
 log = structlog.get_logger(__name__)
 
 #: One publisher per worker process, made on first use so importing this
@@ -55,6 +57,13 @@ def campaign_control_key(campaign_id: str | uuid.UUID) -> str:
     return f"campaign:{campaign_id}:control"
 
 
+#: Where this process says it is alive, and for how long that claim stands.
+#: Mirrored by ``api.services.jobs.HEARTBEAT_KEY``; a test keeps them equal.
+#: The TTL is three beats: one missed minute is a busy job, three is an outage.
+HEARTBEAT_KEY = "uaagro:worker:heartbeat"
+HEARTBEAT_TTL_S = 180
+
+
 #: A contact marked as being dialled this long ago with no live call behind
 #: it never connected. Longer than the provider's ring timeout plus a short
 #: call, shorter than the retry gap.
@@ -71,12 +80,18 @@ async def process_call(ctx: dict[str, Any], call_id: str) -> str:
     from uaagro_db.engine import system_session
 
     from .postcall import run
+    from .summary import build_summariser
 
     # `system_session`, not a bare sessionmaker: RLS policies read `app.role`,
     # and an unbound session sees no rows at all -- this job would report "call
     # not found" for every call it was handed.
     async with system_session() as session:
-        report = await run(session, uuid.UUID(call_id), live_feed=live_feed())
+        report = await run(
+            session,
+            uuid.UUID(call_id),
+            summarise=build_summariser(get_settings()),
+            live_feed=live_feed(),
+        )
 
     if report.failed:
         # Raised so ARQ retries. The stages that succeeded have already
@@ -96,6 +111,7 @@ async def dial_campaign(ctx: dict[str, Any], campaign_id: str) -> str:
     from uaagro_db.engine import system_session
 
     from .campaign import CampaignBlocked, run_campaign
+
     settings = get_settings()
 
     async def originate(to_number: str, from_number: str, custom_field: str) -> str:
@@ -238,9 +254,7 @@ async def expire_retention(ctx: dict[str, Any]) -> str:
     # this as the migrator would delete nothing and report success.
     async with system_session() as session:
         stale = select(Call.id).where(Call.started_at < cutoff)
-        result = await session.execute(
-            delete(CallTurn).where(CallTurn.call_id.in_(stale))
-        )
+        result = await session.execute(delete(CallTurn).where(CallTurn.call_id.in_(stale)))
         removed = int(getattr(result, "rowcount", 0) or 0)
     if removed:
         log.info("retention.transcripts_deleted", turns=removed, cutoff=cutoff.date().isoformat())
@@ -263,9 +277,7 @@ async def verify_audit_chain(ctx: dict[str, Any]) -> str:
     if not result.ok:
         # Raised, not logged. §17 makes this a security incident until shown
         # otherwise, and a log line at 3am is not an incident response.
-        raise RuntimeError(
-            f"audit chain diverges at sequence {result.broken_at}: {result.reason}"
-        )
+        raise RuntimeError(f"audit chain diverges at sequence {result.broken_at}: {result.reason}")
     return ""
 
 
@@ -346,6 +358,21 @@ async def reconcile_contacts(ctx: dict[str, Any]) -> str:
     return ""
 
 
+async def worker_heartbeat(ctx: dict[str, Any]) -> str:
+    """Say that this process is alive, for the panel's knowledge page.
+
+    Every minute, with a TTL of three: the key expires on its own when the
+    worker dies, so the panel never reads a heartbeat from a process that is
+    not there. Written on startup too, so a fresh worker is seen at once
+    rather than at the top of the next minute.
+    """
+    redis = ctx.get("redis")
+    if redis is None:  # pragma: no cover -- ARQ always provides one
+        return "no queue available"
+    await redis.set(HEARTBEAT_KEY, datetime.now(UTC).isoformat(), ex=HEARTBEAT_TTL_S)
+    return ""
+
+
 async def ingest_document(ctx: dict[str, Any], document_id: str) -> str:
     """Extract, chunk, embed and publish one panel upload (§9, §15.1).
 
@@ -421,9 +448,16 @@ class WorkerSettings:
         refresh_embeddings,
         reconcile_contacts,
         ingest_document,
+        worker_heartbeat,
+        run_scheduled_syncs,
     ]
 
     cron_jobs = [  # noqa: RUF012
+        # Every minute. The panel reports the worker missing after three.
+        cron(worker_heartbeat, minute=set(range(60))),
+        # Hourly pulls from the client's database, and the daily ones at the
+        # same minute; the job decides which sources are due.
+        cron(run_scheduled_syncs, minute=7, timeout=1800),
         # Daily, not monthly. See roll_partitions.
         cron(roll_partitions, hour=2, minute=0),
         # Every two minutes: a dial that never connected should turn its card
@@ -457,9 +491,10 @@ class WorkerSettings:
     #: so the queue needs headroom for a burst at the end of a busy hour.
     max_jobs = 20
 
-    @staticmethod
-    def redis_settings() -> RedisSettings:
-        return RedisSettings.from_dsn(get_settings().redis_url)
+    #: A value, not a method: ARQ reads this class's ``__dict__`` and hands
+    #: whatever it finds to the worker, so a callable here reached
+    #: ``create_pool`` as-is and the process died before its first job.
+    redis_settings: RedisSettings = RedisSettings.from_dsn(get_settings().redis_url)
 
     @staticmethod
     async def on_startup(_ctx: dict[str, object]) -> None:
@@ -477,6 +512,7 @@ class WorkerSettings:
             # OTLP push are how its work becomes visible.
             prometheus=False,
         )
+        await worker_heartbeat(dict(_ctx))
 
 
 __all__ = (
@@ -489,4 +525,5 @@ __all__ = (
     "scrub_dnd",
     "start_due_campaigns",
     "verify_audit_chain",
+    "worker_heartbeat",
 )

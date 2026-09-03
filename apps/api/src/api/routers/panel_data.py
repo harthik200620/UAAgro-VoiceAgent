@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from uaagro_db.engine import get_app_engine
-from uaagro_db.storage import ObjectStore
+from uaagro_db.storage import object_store
 from uaagro_domain.enums import Role
 from uaagro_domain.errors import ValidationError
 from uaagro_domain.settings import get_defaults, get_settings
@@ -364,7 +364,7 @@ async def health(_: Annotated[Principal, require_role(Role.OPS_MANAGER)]) -> Hea
     settings = get_settings()
     redis_probe, storage_probe = await asyncio.gather(
         _probe(_ping_redis()),
-        _probe(ObjectStore(settings).ping()),
+        _probe(object_store(settings).ping()),
     )
     return Health(
         redis=redis_probe,

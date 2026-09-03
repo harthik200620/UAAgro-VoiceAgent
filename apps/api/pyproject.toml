@@ -21,6 +21,11 @@ dependencies = [
     # reads .xlsx without a spreadsheet application and without a service:
     # the numbers never leave this process.
     "openpyxl>=3.1",
+    # The client keeps its stores, products and stock in a MySQL database of
+    # its own. aiomysql reads it directly -- SELECT only -- so the catalogue
+    # is pulled from the source rather than re-keyed from an export
+    # (api.services.sources).
+    "aiomysql>=0.2",
     "uaagro-domain",
     "uaagro-db",
     "fastapi>=0.115",

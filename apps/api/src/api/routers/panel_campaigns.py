@@ -15,12 +15,16 @@ so -- which is the accountability the law actually asks for.
 
 **A creator does not approve their own campaign.** The four-eyes rule from
 §13.1. The owner's account can, because a business with one operator would
-otherwise have no way to run at all, and that override is audited under a
-distinct action.
+otherwise have no way to run at all, and that override is written on the row
+(``self_approved``) and audited under a distinct action.
 
 **Pause, resume and stop are instructions to the dialer, not edits to a
 row.** The dialer runs in another process and reads its instruction before
 every dial; the status on the row follows.
+
+The import path is shared with the panel's quick dial (``panel_dial``): one
+set of joins between a pasted line and a consent record, so the fast path
+cannot drift into a weaker one.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ import csv
 import io
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -42,7 +47,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uaagro_db.audit import append_audit
 from uaagro_db.campaigns import evaluate_campaign, load_contacts
 from uaagro_db.crypto import get_cipher
-from uaagro_db.models import AgentConfig, Campaign, CampaignContact, ConsentRecord, Farmer, User
+from uaagro_db.models import (
+    AgentConfig,
+    Call,
+    Campaign,
+    CampaignContact,
+    ConsentRecord,
+    Farmer,
+    User,
+)
 from uaagro_domain import livefeed
 from uaagro_domain.compliance import CampaignSettings, Check, first_failure
 from uaagro_domain.enums import (
@@ -54,17 +67,18 @@ from uaagro_domain.enums import (
     ExclusionReason,
     FlowType,
     Role,
+    TelephonyProvider,
 )
 from uaagro_domain.errors import ComplianceError, NotFoundError, ValidationError
 from uaagro_domain.livefeed import LiveEvent
 from uaagro_domain.phone import normalise_msisdn
-from uaagro_domain.settings import get_defaults, get_settings
+from uaagro_domain.settings import Settings, get_defaults, get_settings
 
 from ..security.deps import DbDep, Principal, PrincipalDep, require_role
 from ..services import jobs
 from ..services.contact_import import extract_contacts
 from ..services.events import relay, streaming_response
-from ._panel import iso, panel_status, short_session
+from ._panel import as_uuid, iso, panel_status, short_session
 
 log = structlog.get_logger(__name__)
 
@@ -80,6 +94,17 @@ _STATUS_TO_BLOCK = {
     Check.INTERNAL_DNC: ExclusionReason.INTERNAL_DNC,
     Check.FREQUENCY_CAP: ExclusionReason.FREQUENCY_CAP,
     Check.DUPLICATE_SUPPRESSION: ExclusionReason.DUPLICATE_ACTIVE_CAMPAIGN,
+}
+
+#: The panel's card states, by the counter each one lands in. A ringing
+#: contact and one in a call are both "in progress" to the tally.
+_STATE_TO_COUNT = {
+    "waiting": "waiting",
+    "ringing": "inCall",
+    "in_call": "inCall",
+    "done": "done",
+    "no_answer": "noAnswer",
+    "removed": "removed",
 }
 
 
@@ -143,6 +168,9 @@ class Contact(BaseModel):
     attempts: int
     lastAttemptAt: str | None
     removedReason: str | None
+    #: In simulator mode, the worker's browser page that picks this call up;
+    #: null once it is answered, and always null when a real carrier dials.
+    answerUrl: str | None
 
 
 class CampaignDetail(CampaignSummary):
@@ -183,30 +211,30 @@ class PatchCampaign(BaseModel):
 async def _counts(
     db: AsyncSession, campaign_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, CampaignCounts]:
+    in_call = CampaignContact.call_id.is_not(None)
     rows = (
         await db.execute(
             select(
                 CampaignContact.campaign_id,
                 CampaignContact.status,
                 CampaignContact.outcome,
+                in_call,
                 func.count(),
             )
             .where(CampaignContact.campaign_id.in_(campaign_ids))
-            .group_by(CampaignContact.campaign_id, CampaignContact.status, CampaignContact.outcome)
+            .group_by(
+                CampaignContact.campaign_id,
+                CampaignContact.status,
+                CampaignContact.outcome,
+                in_call,
+            )
         )
     ).all()
     tally: dict[uuid.UUID, dict[str, int]] = {}
-    for campaign_id, status, outcome, count in rows:
+    for campaign_id, status, outcome, linked, count in rows:
         bucket = tally.setdefault(campaign_id, {})
         bucket["total"] = bucket.get("total", 0) + count
-        state = panel_status(status)
-        key = {
-            "waiting": "waiting",
-            "in_call": "inCall",
-            "done": "done",
-            "no_answer": "noAnswer",
-            "removed": "removed",
-        }[state]
+        key = _STATE_TO_COUNT[panel_status(status, in_call=bool(linked))]
         bucket[key] = bucket.get(key, 0) + count
         if outcome in ("pressed_1", "pressed_2", "talked", "opted_out"):
             camel = {
@@ -234,8 +262,6 @@ async def _counts(
 
 
 async def _first_reply_p50(db: AsyncSession, campaign_id: uuid.UUID) -> int | None:
-    from uaagro_db.models import Call
-
     values = sorted(
         int(stats["first_reply_ms"])
         for stats in (
@@ -248,7 +274,7 @@ async def _first_reply_p50(db: AsyncSession, campaign_id: uuid.UUID) -> int | No
     return values[max(0, min(len(values) - 1, round(0.5 * len(values) + 0.5) - 1))]
 
 
-async def _summaries(
+async def summaries(
     db: AsyncSession, campaigns: list[Campaign], principal: Principal
 ) -> list[CampaignSummary]:
     if not campaigns:
@@ -343,7 +369,20 @@ async def _campaign(db: AsyncSession, campaign_id: uuid.UUID) -> Campaign:
     return campaign
 
 
+def _answer_url(contact: CampaignContact, state: str, settings: Settings) -> str | None:
+    """Where the browser picks this call up, while it is still ringing.
+
+    Only in simulator mode: with a real carrier the farmer's phone rings and
+    a page cannot answer it. Only while ringing: once a call is linked the
+    conversation is under way, and a second page would start a second one.
+    """
+    if settings.telephony_provider is not TelephonyProvider.SIMULATOR or state != "ringing":
+        return None
+    return f"{settings.voice_worker_public_url.rstrip('/')}/dev/call?answer={contact.id}"
+
+
 async def _contacts(db: AsyncSession, campaign_id: uuid.UUID) -> list[Contact]:
+    settings = get_settings()
     rows = (
         await db.execute(
             select(CampaignContact, Farmer.full_name, Farmer.phone_last4)
@@ -352,59 +391,52 @@ async def _contacts(db: AsyncSession, campaign_id: uuid.UUID) -> list[Contact]:
             .order_by(CampaignContact.created_at, CampaignContact.id)
         )
     ).all()
-    return [
-        Contact(
-            id=str(contact.id),
-            farmerName=name,
-            last4=str(last4),
-            status=panel_status(contact.status),
-            outcome=contact.outcome,
-            dtmf=contact.dtmf_response,
-            callId=str(contact.call_id) if contact.call_id else None,
-            attempts=int(contact.attempts or 0),
-            lastAttemptAt=iso(contact.last_attempt_at),
-            removedReason=contact.exclusion_reason.value if contact.exclusion_reason else None,
-        )
-        for contact, name, last4 in rows
-    ]
-
-
-# --------------------------------------------------------------------------- #
-# Routes
-# --------------------------------------------------------------------------- #
-
-
-@router.get("", response_model=list[CampaignSummary])
-async def list_campaigns(
-    db: DbDep, principal: Annotated[Principal, require_role(Role.CENTRE_MANAGER)]
-) -> list[CampaignSummary]:
-    campaigns = list(
-        (
-            await db.scalars(
-                select(Campaign)
-                .where(Campaign.deleted_at.is_(None))
-                .order_by(Campaign.created_at.desc())
+    out: list[Contact] = []
+    for contact, name, last4 in rows:
+        state = panel_status(contact.status, in_call=contact.call_id is not None)
+        out.append(
+            Contact(
+                id=str(contact.id),
+                farmerName=name,
+                last4=str(last4),
+                status=state,
+                outcome=contact.outcome,
+                dtmf=contact.dtmf_response,
+                callId=str(contact.call_id) if contact.call_id else None,
+                attempts=int(contact.attempts or 0),
+                lastAttemptAt=iso(contact.last_attempt_at),
+                removedReason=contact.exclusion_reason.value if contact.exclusion_reason else None,
+                answerUrl=_answer_url(contact, state, settings),
             )
-        ).all()
-    )
-    return await _summaries(db, campaigns, principal)
-
-
-@router.post("", response_model=CampaignCreated, status_code=201)
-async def create_campaign(
-    body: CreateCampaign,
-    db: DbDep,
-    principal: Annotated[Principal, require_role(Role.OPS_MANAGER)],
-) -> CampaignCreated:
-    if not body.consentAttested:
-        raise ConsentRequiredError(
-            "The consent attestation is required.",
-            remedy="Tick the box confirming these farmers agreed to promotional calls "
-            "from UA Agro. Without recorded consent a promotional call is an offence.",
         )
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Importing
+# --------------------------------------------------------------------------- #
+
+
+async def published_outbound_flow(db: AsyncSession, flow_id: str | None) -> AgentConfig:
+    """The script a campaign will speak: the one named, or the one that is live."""
+    if flow_id is None:
+        live = await db.scalar(
+            select(AgentConfig).where(
+                AgentConfig.flow_type == FlowType.OUTBOUND,
+                AgentConfig.is_published.is_(True),
+                AgentConfig.deleted_at.is_(None),
+            )
+        )
+        if live is None:
+            raise ValidationError(
+                "No outbound script is published.",
+                remedy="Publish an outbound script under Flows first; a campaign only "
+                "ever speaks a published version.",
+            )
+        return live
     flow = await db.scalar(
         select(AgentConfig).where(
-            AgentConfig.id == uuid.UUID(body.flowId),
+            AgentConfig.id == as_uuid(flow_id, what="flowId"),
             AgentConfig.flow_type == FlowType.OUTBOUND,
             AgentConfig.deleted_at.is_(None),
         )
@@ -416,8 +448,37 @@ async def create_campaign(
             f"{flow.name} v{flow.version} is a draft.",
             remedy="Publish the script first; a campaign only ever speaks a published version.",
         )
+    return flow
 
-    parsed, invalid = _parse_numbers(body.numbers)
+
+@dataclass(frozen=True, slots=True)
+class Imported:
+    """What a pasted list became."""
+
+    campaign: Campaign
+    imported: int
+    invalid: list[str]
+    removed_by: list[tuple[str, int]]
+
+
+async def import_campaign(
+    db: AsyncSession,
+    principal: Principal,
+    *,
+    name: str,
+    flow: AgentConfig,
+    numbers: str,
+    max_concurrent: int,
+    consent_note: str | None,
+    source_type: str = "manual",
+) -> Imported:
+    """A pasted list into a campaign waiting for approval, gate already run.
+
+    The path a campaign and a quick dial share: farmers found or created with
+    an encrypted phone, a consent record naming who attested, contacts, and
+    the scrub that marks the ones the gate removes.
+    """
+    parsed, invalid = _parse_numbers(numbers)
     if not parsed:
         raise ValidationError(
             "No usable phone numbers were found.",
@@ -434,13 +495,13 @@ async def create_campaign(
     now = datetime.now(UTC)
     campaign = Campaign(
         organization_id=principal.organization_id,
-        name=body.name.strip(),
+        name=name,
         agent_config_id=flow.id,
         status=CampaignStatus.PENDING_APPROVAL,
-        source_type="manual",
+        source_type=source_type,
         daily_window_start=_time(defaults.compliance.calling_window_start),
         daily_window_end=_time(defaults.compliance.calling_window_end),
-        max_concurrent_calls=body.maxConcurrent,
+        max_concurrent_calls=max_concurrent,
         caller_id_number=settings.outbound_cli_promotional,
         dlt_entity_id=settings.dlt_entity_id,
         dlt_template_id=settings.dlt_template_id,
@@ -454,7 +515,7 @@ async def create_campaign(
     consent_days = defaults.compliance.consent_validity_days
     seen: set[bytes] = set()
     imported = 0
-    for name, msisdn in parsed:
+    for farmer_name, msisdn in parsed:
         phone_hash = cipher.hash(msisdn)
         if phone_hash in seen:
             continue
@@ -466,15 +527,15 @@ async def create_campaign(
                 phone_hash=phone_hash,
                 phone_enc=cipher.encrypt(msisdn),
                 phone_last4=msisdn.last4,
-                full_name=name,
+                full_name=farmer_name,
                 preferred_language=defaults.default_language,
                 first_seen_at=now,
                 created_by=principal.user_id,
             )
             db.add(farmer)
             await db.flush()
-        elif name and not farmer.full_name:
-            farmer.full_name = name
+        elif farmer_name and not farmer.full_name:
+            farmer.full_name = farmer_name
 
         has_consent = await db.scalar(
             select(ConsentRecord.id)
@@ -499,7 +560,7 @@ async def create_campaign(
                         "attested_at": now.isoformat(),
                         "via": "panel_import",
                         "campaign_id": str(campaign.id),
-                        "note": (body.consentNote or "").strip()[:500],
+                        "note": (consent_note or "").strip()[:500],
                     },
                 )
             )
@@ -517,25 +578,19 @@ async def create_campaign(
         actor_user_id=principal.user_id,
         after={
             "name": campaign.name,
+            "source": source_type,
             "flow": f"{flow.name} v{flow.version}",
             "contacts": imported,
             "invalid_lines": len(invalid),
             "consent_attested": True,
-            "consent_note": (body.consentNote or "").strip()[:500],
+            "consent_note": (consent_note or "").strip()[:500],
             "removed_by": {check: count for check, count in removed_by},
         },
     )
     log.info(
         "campaign.created", campaign_id=str(campaign.id), contacts=imported, invalid=len(invalid)
     )
-
-    summary = (await _summaries(db, [campaign], principal))[0]
-    return CampaignCreated(
-        campaign=summary,
-        imported=imported,
-        invalid=invalid,
-        removedBy=[RemovedBy(check=check, count=count) for check, count in removed_by],
-    )
+    return Imported(campaign=campaign, imported=imported, invalid=invalid, removed_by=removed_by)
 
 
 async def _scrub(db: AsyncSession, campaign: Campaign) -> list[tuple[str, int]]:
@@ -573,52 +628,6 @@ async def _scrub(db: AsyncSession, campaign: Campaign) -> list[tuple[str, int]]:
         removed[failure.value] = removed.get(failure.value, 0) + 1
     await db.flush()
     return sorted(removed.items())
-
-
-class ExtractedContacts(BaseModel):
-    """What a file offered, before anything is created from it."""
-
-    lines: list[str]
-    found: int
-    skipped: int
-    sheets: int
-
-
-@router.post("/contacts/extract", response_model=ExtractedContacts)
-async def extract(
-    _: Annotated[Principal, require_role(Role.OPS_MANAGER)],
-    file: Annotated[UploadFile, File()],
-) -> ExtractedContacts:
-    """Read a spreadsheet or CSV and hand back the contact lines it contains.
-
-    Nothing is stored and no campaign is created: the operator sees the list
-    in the same box they would have pasted into, edits it if a row came out
-    wrong, and creates the campaign from that. Which means a file cannot
-    smuggle in a number the person who uploaded it did not see.
-
-    The reading is done here rather than in the browser because a spreadsheet
-    is a zip archive of XML, and because "which cell is the phone number" is
-    the same judgement the pasted-list parser already makes -- one
-    implementation, in one language, with tests.
-    """
-    if not file.filename:
-        raise ValidationError("No file was sent.", remedy="Choose a spreadsheet or a CSV file.")
-    data = await file.read()
-    found = extract_contacts(data, filename=file.filename)
-    log.info(
-        "campaign.contacts_extracted",
-        # Never the numbers, never the file name: a list of farmers is a list
-        # of farmers whatever it is called (§23-6).
-        found=len(found.lines),
-        skipped=found.skipped,
-        sheets=found.sheets,
-    )
-    return ExtractedContacts(
-        lines=found.lines,
-        found=len(found.lines),
-        skipped=found.skipped,
-        sheets=found.sheets,
-    )
 
 
 _NUMBER = re.compile(r"(?:\+?91[\s-]?)?0?[6-9]\d{9}")
@@ -667,6 +676,104 @@ def _time(value: str) -> Any:
     return _t(int(hours), int(minutes))
 
 
+# --------------------------------------------------------------------------- #
+# Routes
+# --------------------------------------------------------------------------- #
+
+
+@router.get("", response_model=list[CampaignSummary])
+async def list_campaigns(
+    db: DbDep, principal: Annotated[Principal, require_role(Role.CENTRE_MANAGER)]
+) -> list[CampaignSummary]:
+    campaigns = list(
+        (
+            await db.scalars(
+                select(Campaign)
+                .where(Campaign.deleted_at.is_(None))
+                .order_by(Campaign.created_at.desc())
+            )
+        ).all()
+    )
+    return await summaries(db, campaigns, principal)
+
+
+@router.post("", response_model=CampaignCreated, status_code=201)
+async def create_campaign(
+    body: CreateCampaign,
+    db: DbDep,
+    principal: Annotated[Principal, require_role(Role.OPS_MANAGER)],
+) -> CampaignCreated:
+    if not body.consentAttested:
+        raise ConsentRequiredError(
+            "The consent attestation is required.",
+            remedy="Tick the box confirming these farmers agreed to promotional calls "
+            "from UA Agro. Without recorded consent a promotional call is an offence.",
+        )
+    flow = await published_outbound_flow(db, body.flowId)
+    imported = await import_campaign(
+        db,
+        principal,
+        name=body.name.strip(),
+        flow=flow,
+        numbers=body.numbers,
+        max_concurrent=body.maxConcurrent,
+        consent_note=body.consentNote,
+    )
+    summary = (await summaries(db, [imported.campaign], principal))[0]
+    return CampaignCreated(
+        campaign=summary,
+        imported=imported.imported,
+        invalid=imported.invalid,
+        removedBy=[RemovedBy(check=check, count=count) for check, count in imported.removed_by],
+    )
+
+
+class ExtractedContacts(BaseModel):
+    """What a file offered, before anything is created from it."""
+
+    lines: list[str]
+    found: int
+    skipped: int
+    sheets: int
+
+
+@router.post("/contacts/extract", response_model=ExtractedContacts)
+async def extract(
+    _: Annotated[Principal, require_role(Role.OPS_MANAGER)],
+    file: Annotated[UploadFile, File()],
+) -> ExtractedContacts:
+    """Read a spreadsheet or CSV and hand back the contact lines it contains.
+
+    Nothing is stored and no campaign is created: the operator sees the list
+    in the same box they would have pasted into, edits it if a row came out
+    wrong, and creates the campaign from that. Which means a file cannot
+    smuggle in a number the person who uploaded it did not see.
+
+    The reading is done here rather than in the browser because a spreadsheet
+    is a zip archive of XML, and because "which cell is the phone number" is
+    the same judgement the pasted-list parser already makes -- one
+    implementation, in one language, with tests.
+    """
+    if not file.filename:
+        raise ValidationError("No file was sent.", remedy="Choose a spreadsheet or a CSV file.")
+    data = await file.read()
+    found = extract_contacts(data, filename=file.filename)
+    log.info(
+        "campaign.contacts_extracted",
+        # Never the numbers, never the file name: a list of farmers is a list
+        # of farmers whatever it is called (§23-6).
+        found=len(found.lines),
+        skipped=found.skipped,
+        sheets=found.sheets,
+    )
+    return ExtractedContacts(
+        lines=found.lines,
+        found=len(found.lines),
+        skipped=found.skipped,
+        sheets=found.sheets,
+    )
+
+
 @router.get("/{campaign_id}", response_model=CampaignDetail)
 async def campaign_detail(
     campaign_id: uuid.UUID,
@@ -674,7 +781,7 @@ async def campaign_detail(
     principal: Annotated[Principal, require_role(Role.CENTRE_MANAGER)],
 ) -> CampaignDetail:
     campaign = await _campaign(db, campaign_id)
-    summary = (await _summaries(db, [campaign], principal))[0]
+    summary = (await summaries(db, [campaign], principal))[0]
     return CampaignDetail(**summary.model_dump(), contacts=await _contacts(db, campaign.id))
 
 
@@ -703,7 +810,7 @@ async def patch_campaign(
         before=before,
         after={"name": campaign.name, "max_concurrent_calls": campaign.max_concurrent_calls},
     )
-    return (await _summaries(db, [campaign], principal))[0]
+    return (await summaries(db, [campaign], principal))[0]
 
 
 @router.post("/{campaign_id}/approve", response_model=CampaignSummary)
@@ -719,7 +826,8 @@ async def approve_campaign(
             "not waiting for approval.",
             remedy="Only a campaign waiting for approval can be approved.",
         )
-    if campaign.created_by == principal.user_id and principal.role is not Role.SUPER_ADMIN:
+    own = campaign.created_by == principal.user_id
+    if own and principal.role is not Role.SUPER_ADMIN:
         raise FourEyesError(
             "You created this campaign, so somebody else has to approve it.",
             remedy="Ask another ops manager to approve, or the owner's account can.",
@@ -735,6 +843,9 @@ async def approve_campaign(
     campaign.status = CampaignStatus.APPROVED
     campaign.approved_by_user_id = principal.user_id
     campaign.approved_at = datetime.now(UTC)
+    # The owner's override, on the row: the schema refuses an approver equal
+    # to the creator unless the row says the waiver was deliberate.
+    campaign.self_approved = own
     await append_audit(
         db,
         action=AuditAction.APPROVE,
@@ -744,10 +855,10 @@ async def approve_campaign(
         after={
             "eligible": report.eligible_count,
             "total": report.total,
-            "self_approved_by_owner": campaign.created_by == principal.user_id,
+            "self_approved_by_owner": own,
         },
     )
-    return (await _summaries(db, [campaign], principal))[0]
+    return (await summaries(db, [campaign], principal))[0]
 
 
 @router.post("/{campaign_id}/start", response_model=CampaignSummary)
@@ -779,7 +890,7 @@ async def start_campaign(
         actor_user_id=principal.user_id,
         after={"status": "running"},
     )
-    return (await _summaries(db, [campaign], principal))[0]
+    return (await summaries(db, [campaign], principal))[0]
 
 
 @router.post("/{campaign_id}/pause", response_model=CampaignSummary)
@@ -801,7 +912,7 @@ async def pause_campaign(
         actor_user_id=principal.user_id,
         after={"status": "paused"},
     )
-    return (await _summaries(db, [campaign], principal))[0]
+    return (await summaries(db, [campaign], principal))[0]
 
 
 @router.post("/{campaign_id}/resume", response_model=CampaignSummary)
@@ -830,7 +941,7 @@ async def stop_campaign(
         actor_user_id=principal.user_id,
         after={"status": "cancelled"},
     )
-    return (await _summaries(db, [campaign], principal))[0]
+    return (await summaries(db, [campaign], principal))[0]
 
 
 @router.get("/{campaign_id}/events")
@@ -843,7 +954,7 @@ async def campaign_events(
     async def snapshot() -> Any:
         async with short_session(principal) as db:
             campaign = await _campaign(db, campaign_id)
-            summary = (await _summaries(db, [campaign], principal))[0]
+            summary = (await summaries(db, [campaign], principal))[0]
             return CampaignDetail(
                 **summary.model_dump(), contacts=await _contacts(db, campaign.id)
             ).model_dump()
@@ -856,7 +967,7 @@ async def campaign_events(
         if event.type == livefeed.CAMPAIGN_UPDATED:
             async with short_session(principal) as db:
                 campaign = await _campaign(db, campaign_id)
-                summary = (await _summaries(db, [campaign], principal))[0]
+                summary = (await summaries(db, [campaign], principal))[0]
             return [(event.type, summary.model_dump())]
         if event.type == livefeed.CALL_TURN:
             return [(event.type, event.payload)]
@@ -898,4 +1009,13 @@ async def export_campaign(
     )
 
 
-__all__ = ("router",)
+__all__ = (
+    "CampaignCreated",
+    "ConsentRequiredError",
+    "Imported",
+    "RemovedBy",
+    "import_campaign",
+    "published_outbound_flow",
+    "router",
+    "summaries",
+)

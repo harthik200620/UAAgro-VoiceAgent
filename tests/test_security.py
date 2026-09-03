@@ -137,6 +137,39 @@ def test_production_readiness_check_covers_every_security_control() -> None:
         settings.verify_production_readiness()
 
 
+def _production_settings(**overrides: object) -> Settings:
+    """Every §17 control present, so a refusal below is about the override."""
+    return Settings(
+        app_env="production",
+        kms_key_id="arn:aws:kms:ap-south-1:000000000000:key/test",
+        phone_hash_pepper=base64.b64encode(b"P" * 32).decode(),
+        jwt_signing_key=base64.b64encode(b"J" * 32).decode(),
+        telephony_ws_token="test-ws-token-not-a-secret",
+        internal_api_token="test-internal-token-not-a-secret",
+        session_cookie_secure=True,
+        **overrides,
+    )
+
+
+def test_production_refuses_recordings_on_a_local_disk() -> None:
+    """A recording on a container's disk vanishes with the container (§18)."""
+    settings = _production_settings(storage_backend="local", outbound_quick_dial_self_approve=False)
+    with pytest.raises(ConfigurationError) as caught:
+        settings.verify_production_readiness()
+    assert "STORAGE_BACKEND" in caught.value.message
+
+
+def test_production_refuses_a_self_approving_quick_dial() -> None:
+    """§13.1's four-eyes rule holds for every campaign in production."""
+    settings = _production_settings(storage_backend="s3", outbound_quick_dial_self_approve=True)
+    with pytest.raises(ConfigurationError) as caught:
+        settings.verify_production_readiness()
+    assert "OUTBOUND_QUICK_DIAL_SELF_APPROVE" in caught.value.message
+    _production_settings(
+        storage_backend="s3", outbound_quick_dial_self_approve=False
+    ).verify_production_readiness()
+
+
 def test_placeholder_credentials_are_treated_as_absent() -> None:
     """A copied-but-unedited .env must fail clearly, not send FILL_ME to a vendor."""
     settings = Settings(sarvam_api_key="FILL_ME", deepgram_api_key="  ")

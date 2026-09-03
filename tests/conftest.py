@@ -11,7 +11,8 @@ import asyncio
 import base64
 import os
 import socket
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Any
 
 import pytest
 
@@ -133,6 +134,57 @@ def _test_environment() -> Iterator[None]:
     yield
     os.environ.clear()
     os.environ.update(previous)
+    reset_caches()
+
+
+@pytest.fixture
+async def panel(app_engine):  # type: ignore[no-untyped-def]
+    """The panel's API on the embedded database, signed in as a seeded user.
+
+    See ``tests/panel_support.py``: authentication is stubbed, authorisation
+    and row-level security are not.
+    """
+    from tests.panel_support import panel_client
+
+    async with panel_client(app_engine) as http:
+        yield http
+
+
+@pytest.fixture
+def quiet_queue(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
+    """The job queue and the campaign control key, recorded rather than sent."""
+    from api.services import jobs
+
+    seen: dict[str, list[Any]] = {"enqueued": [], "control": []}
+
+    async def enqueue(job: str, *args: Any) -> None:
+        seen["enqueued"].append((job, args))
+
+    async def set_control(campaign_id: Any, instruction: str | None) -> None:
+        seen["control"].append((campaign_id, instruction))
+
+    monkeypatch.setattr(jobs, "enqueue", enqueue)
+    monkeypatch.setattr(jobs, "set_control", set_control)
+    return seen
+
+
+@pytest.fixture
+def settings_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., None]]:
+    """Set environment variables for one test and reload the settings.
+
+    The settings object is cached for the life of the process; a test that
+    changes the environment has to drop that cache, and drop it again on the
+    way out so the next test does not inherit the change.
+    """
+    from uaagro_domain.settings import reset_caches
+
+    def apply(**values: str) -> None:
+        for key, value in values.items():
+            monkeypatch.setenv(key, value)
+        reset_caches()
+
+    yield apply
+    monkeypatch.undo()
     reset_caches()
 
 

@@ -40,13 +40,20 @@ def iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def panel_status(status: ContactStatus) -> str:
-    """The contract's four-state vocabulary for a stored contact status."""
+def panel_status(status: ContactStatus, *, in_call: bool = False) -> str:
+    """The contract's vocabulary for a stored contact status.
+
+    A contact being dialled is *ringing* until the media path links the call
+    it produced, and in a call from then on. Both are ``DIALING`` on the row,
+    so whether a call is linked is what tells them apart -- and it is what
+    the simulator's answer link keys on: a ringing contact can still be
+    picked up.
+    """
     match status:
         case ContactStatus.PENDING:
             return "waiting"
         case ContactStatus.DIALING:
-            return "in_call"
+            return "in_call" if in_call else "ringing"
         case ContactStatus.COMPLETED | ContactStatus.OPTED_OUT:
             return "done"
         case ContactStatus.NO_ANSWER | ContactStatus.BUSY | ContactStatus.FAILED:

@@ -8,6 +8,12 @@ names one the table does not have, with the state's default bigha factor and
 a flag saying nobody has verified it -- and gets a code in the same shape as
 the seeded ones.
 
+One centre is the head office. The helpline answers stock and price for it
+when the caller's own centre is unknown, and says so; making another centre
+primary moves the flag in the same transaction, and the partial unique index
+refuses a second one whatever this code does. The primary centre cannot be
+switched off or un-flagged -- there is always exactly one -- only replaced.
+
 Stock is per centre and per pack size (§15.1's inventory grid). The panel
 shows the first few items on the centre row and the whole list behind it;
 a toggle reaches the agent within the catalogue cache's five seconds.
@@ -15,6 +21,7 @@ a toggle reaches the agent within the catalogue cache's five seconds.
 
 from __future__ import annotations
 
+import math
 import re
 import uuid
 from datetime import UTC, datetime
@@ -23,9 +30,9 @@ from decimal import Decimal
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uaagro_db.audit import append_audit
@@ -45,6 +52,9 @@ router = APIRouter(prefix="/admin", tags=["panel"])
 #: Stock lines shown on the centre row itself. The full list is one click in.
 STOCK_PREVIEW = 6
 _DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+#: The column is forty characters; a service name longer than that is a sentence.
+MAX_SERVICE_CHARS = 40
+EARTH_RADIUS_KM = 6371.0
 
 
 class StockRow(BaseModel):
@@ -76,6 +86,15 @@ class CentreRow(BaseModel):
     isActive: bool
     openNow: bool
     stock: list[StockRow]
+    isPrimary: bool
+    addressSpoken: str | None
+    services: list[str]
+    stockOuts: int
+
+
+class NearestCentre(BaseModel):
+    centre: CentreRow
+    distanceKm: float
 
 
 class CentreBody(BaseModel):
@@ -94,6 +113,9 @@ class CentreBody(BaseModel):
     closeTime: str | None = None
     workingDays: list[str] | None = None
     isActive: bool | None = None
+    isPrimary: bool | None = None
+    addressSpoken: str | None = Field(default=None, max_length=500)
+    services: list[str] | None = None
 
 
 class StockPatch(BaseModel):
@@ -168,6 +190,20 @@ async def _stock(
     return out
 
 
+async def _stock_outs(db: AsyncSession, centre_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+    """Products switched off per centre -- the number on the centre row."""
+    if not centre_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(Inventory.centre_id, func.count())
+            .where(Inventory.centre_id.in_(centre_ids), Inventory.is_available.is_(False))
+            .group_by(Inventory.centre_id)
+        )
+    ).all()
+    return {centre_id: int(count) for centre_id, count in rows}
+
+
 def _open_now(centre: Centre) -> bool:
     local = now_ist()
     day = _DAYS[local.weekday()]
@@ -177,7 +213,7 @@ def _open_now(centre: Centre) -> bool:
     return centre.open_time <= local.time() <= centre.close_time
 
 
-def _row(centre: Centre, district: District, stock: list[StockRow]) -> CentreRow:
+def _row(centre: Centre, district: District, stock: list[StockRow], stock_outs: int) -> CentreRow:
     return CentreRow(
         id=str(centre.id),
         code=centre.code,
@@ -198,6 +234,10 @@ def _row(centre: Centre, district: District, stock: list[StockRow]) -> CentreRow
         isActive=bool(centre.is_active),
         openNow=bool(centre.is_active) and _open_now(centre),
         stock=stock,
+        isPrimary=bool(centre.is_primary),
+        addressSpoken=centre.address_spoken_hi,
+        services=list(centre.services_offered or []),
+        stockOuts=stock_outs,
     )
 
 
@@ -211,8 +251,13 @@ async def _centres(db: AsyncSession, centre_id: uuid.UUID | None = None) -> list
     if centre_id is not None:
         statement = statement.where(Centre.id == centre_id)
     rows = (await db.execute(statement)).all()
-    stock = await _stock(db, [centre.id for centre, _ in rows], limit=STOCK_PREVIEW)
-    return [_row(centre, district, stock.get(centre.id, [])) for centre, district in rows]
+    ids = [centre.id for centre, _ in rows]
+    stock = await _stock(db, ids, limit=STOCK_PREVIEW)
+    stock_outs = await _stock_outs(db, ids)
+    return [
+        _row(centre, district, stock.get(centre.id, []), stock_outs.get(centre.id, 0))
+        for centre, district in rows
+    ]
 
 
 @router.get("/centres", response_model=list[CentreRow])
@@ -220,6 +265,45 @@ async def centres(
     db: DbDep, _: Annotated[Principal, require_role(Role.CENTRE_MANAGER)]
 ) -> list[CentreRow]:
     return await _centres(db)
+
+
+def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance, which at district scale is the road's optimism."""
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lng2 - lng1)
+    a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(a))
+
+
+@router.get("/centres/nearest", response_model=NearestCentre)
+async def nearest_centre(
+    db: DbDep,
+    _: Annotated[Principal, require_role(Role.CENTRE_MANAGER)],
+    lat: float = Query(ge=-90, le=90),
+    lng: float = Query(ge=-180, le=180),
+) -> NearestCentre:
+    """The active centre closest to a point, as the agent would pick it."""
+    rows = (
+        await db.execute(
+            select(Centre.id, Centre.latitude, Centre.longitude).where(
+                Centre.deleted_at.is_(None),
+                Centre.is_active.is_(True),
+                Centre.latitude.is_not(None),
+                Centre.longitude.is_not(None),
+            )
+        )
+    ).all()
+    if not rows:
+        raise NotFoundError(resource="centre with coordinates", identifier=f"{lat:.4f},{lng:.4f}")
+    distances = {
+        centre_id: haversine_km(lat, lng, float(latitude), float(longitude))
+        for centre_id, latitude, longitude in rows
+    }
+    nearest_id = min(distances, key=lambda centre_id: distances[centre_id])
+    return NearestCentre(
+        centre=(await _centres(db, nearest_id))[0], distanceKm=round(distances[nearest_id], 1)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -297,6 +381,44 @@ def _days(values: list[str] | None) -> list[str] | None:
     return [d for d in _DAYS if d in cleaned]
 
 
+def _services(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    cleaned: list[str] = []
+    for value in values:
+        service = " ".join(value.split())
+        if not service:
+            continue
+        if len(service) > MAX_SERVICE_CHARS:
+            raise ValidationError(
+                f"{service[:20]!r}… is too long for a service name.",
+                remedy=f"Keep each service under {MAX_SERVICE_CHARS} characters.",
+            )
+        if service not in cleaned:
+            cleaned.append(service)
+    return cleaned
+
+
+async def _make_primary(db: AsyncSession, centre: Centre) -> None:
+    """Move the head-office flag here, and off whichever centre had it.
+
+    The previous one is cleared in the same transaction, before this row is
+    flushed, so the partial unique index never sees two -- and if it did, it
+    would refuse, which is the guarantee this code expresses the intent of.
+    """
+    await db.execute(
+        update(Centre)
+        .where(
+            Centre.organization_id == centre.organization_id,
+            Centre.is_primary.is_(True),
+            Centre.id != centre.id,
+        )
+        .values(is_primary=False)
+    )
+    centre.is_primary = True
+    await db.flush()
+
+
 @router.post("/centres", response_model=CentreRow, status_code=201)
 async def create_centre(
     body: CentreBody,
@@ -315,6 +437,7 @@ async def create_centre(
         name_hi=(body.nameHi or "").strip() or None,
         district_id=district.id,
         block=(body.block or "").strip() or None,
+        address_spoken_hi=(body.addressSpoken or "").strip() or None,
         pincode=(body.pincode or "").strip() or None,
         latitude=Decimal(str(body.latitude)) if body.latitude is not None else None,
         longitude=Decimal(str(body.longitude)) if body.longitude is not None else None,
@@ -324,18 +447,34 @@ async def create_centre(
         open_time=_parse_time(body.openTime, _time(8, 0)),
         close_time=_parse_time(body.closeTime, _time(19, 0)),
         working_days=_days(body.workingDays) or ["mon", "tue", "wed", "thu", "fri", "sat"],
+        services_offered=_services(body.services) or [],
         is_active=body.isActive if body.isActive is not None else True,
+        is_primary=False,
         created_by=principal.user_id,
     )
+    if centre.open_time >= centre.close_time:
+        raise ValidationError("The centre would close before it opens.", remedy="Check the hours.")
     db.add(centre)
     await db.flush()
+    if body.isPrimary:
+        if not centre.is_active:
+            raise ValidationError(
+                "An inactive centre cannot be the head office.",
+                remedy="Create it active, or make another centre primary.",
+            )
+        await _make_primary(db, centre)
     await append_audit(
         db,
         action=AuditAction.CREATE,
         resource_type="centre",
         resource_id=str(centre.id),
         actor_user_id=principal.user_id,
-        after={"code": centre.code, "name": centre.name, "district": district.name},
+        after={
+            "code": centre.code,
+            "name": centre.name,
+            "district": district.name,
+            "is_primary": centre.is_primary,
+        },
     )
     return (await _centres(db, centre.id))[0]
 
@@ -357,6 +496,7 @@ async def update_centre(
         "manager_name": centre.manager_name,
         "transfer_number": centre.transfer_number,
         "is_active": centre.is_active,
+        "is_primary": centre.is_primary,
         "hours": f"{centre.open_time}-{centre.close_time}",
     }
     if body.name:
@@ -368,6 +508,8 @@ async def update_centre(
         centre.district_id = district.id
     if body.block is not None:
         centre.block = body.block.strip() or None
+    if body.addressSpoken is not None:
+        centre.address_spoken_hi = body.addressSpoken.strip() or None
     if body.pincode is not None:
         centre.pincode = body.pincode.strip() or None
     if body.latitude is not None:
@@ -387,8 +529,28 @@ async def update_centre(
     days = _days(body.workingDays)
     if days is not None:
         centre.working_days = days
+    services = _services(body.services)
+    if services is not None:
+        centre.services_offered = services
     if body.isActive is not None:
+        if not body.isActive and centre.is_primary:
+            raise ValidationError(
+                "The head office cannot be switched off.",
+                remedy="Make another centre primary first, then switch this one off.",
+            )
         centre.is_active = body.isActive
+    if body.isPrimary is False and centre.is_primary:
+        raise ValidationError(
+            "There is always one head office.",
+            remedy="Pick another centre as primary; the flag moves off this one.",
+        )
+    if body.isPrimary and not centre.is_primary:
+        if not centre.is_active:
+            raise ValidationError(
+                "An inactive centre cannot be the head office.",
+                remedy="Switch the centre on, then make it primary.",
+            )
+        await _make_primary(db, centre)
     if centre.open_time >= centre.close_time:
         raise ValidationError("The centre would close before it opens.", remedy="Check the hours.")
     centre.updated_at = datetime.now(UTC)
@@ -404,6 +566,7 @@ async def update_centre(
             "manager_name": centre.manager_name,
             "transfer_number": centre.transfer_number,
             "is_active": centre.is_active,
+            "is_primary": centre.is_primary,
             "hours": f"{centre.open_time}-{centre.close_time}",
         },
     )
@@ -522,4 +685,4 @@ async def update_transfer_rules(
     return _rules(organization)
 
 
-__all__ = ("router",)
+__all__ = ("CentreRow", "haversine_km", "router")

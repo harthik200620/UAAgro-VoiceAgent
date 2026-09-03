@@ -298,3 +298,216 @@ type TransferRules = {
 | `consent_required` | `consentAttested` was not true | keep the checkbox required |
 | `telephony_unconfigured` / `vendor_unconfigured` | a vendor key is missing | show the remedy text verbatim |
 | `not_found`, `forbidden`, `validation_error` | as named | |
+
+---
+
+# Additions of 3 September 2026
+
+The sections below extend the contract above. Where a shape is repeated
+here it replaces the earlier one. Everything is camelCase JSON, needs a
+bearer token, and answers errors as `{"error": {code, message, remedy, context}}`.
+
+## Overview — the first page
+
+### `GET /admin/overview?range=today|7d|30d` — needs centre_manager
+
+Everything a manager needs to know at a glance, RLS-scoped, computed from
+`calls`, `campaigns`, `tickets`, `inventory` and `kb_documents`. Served
+from a 15-second cache; `generatedAt` says when.
+
+```ts
+type Overview = {
+  range: "today" | "7d" | "30d"; from: string; to: string; generatedAt: string;
+  live: { calls: number; capacity: number };
+  calls: {
+    total: number; inbound: number; outbound: number;
+    answeredByAgent: number;      // ended without a transfer
+    transferred: number; missed: number;  // missed = ended with an error or with no reply from the agent
+    testCalls: number;            // placed from the browser page (provider "simulator"); counted separately, never in the others
+  };
+  outcomes: { key: string; label: string; count: number }[];   // CallOutcome values, largest first
+  speed: {
+    firstReplyP50Ms: number | null; firstReplyP95Ms: number | null;
+    replyP50Ms: number | null;    // every agent reply in range
+    withinBudgetPct: number | null;   // replies under 1,200 ms, 0-100
+  };
+  outbound: {
+    campaignsRunning: number; contactsDialled: number; reached: number;
+    pressed1: number; pressed2: number; optedOut: number;
+  };
+  attention: AttentionItem[];   // what needs a person, most urgent first, max 12
+  recent: RecentCall[];         // newest first, max 10; RecentCall as in the live snapshot plus isTest: boolean and summaryHi: string | null
+  byHour: { hour: string; inbound: number; outbound: number }[];   // "09:00" .. in Asia/Kolkata; 24 rows for today, one per day ("Mon 1") for 7d/30d
+  topQuestions: { intent: string; label: string; count: number }[];   // from call_turns tool_calls / intents, max 8
+};
+type AttentionItem = {
+  kind: "ticket" | "transfer_failed" | "unanswered" | "stock_out" | "knowledge_pending"
+      | "knowledge_failed" | "campaign_blocked" | "telephony" | "llm" | "worker";
+  severity: "high" | "medium" | "low";
+  title: string;                // English; the panel translates by kind
+  detail: string | null; href: string | null;   // panel route to act on it, e.g. "/calls/<id>", "/inbound/knowledge"
+  at: string | null; count: number;
+};
+```
+
+`attention` includes: open tickets (high when a safety emergency), transfers that
+failed, calls the agent could not answer (two `unknown` intents in one call),
+stock-outs per centre, knowledge documents pending for more than 2 minutes or
+failed, campaigns blocked by the gate, telephony not configured
+(`kind: "telephony"`), and the background worker not seen for 3 minutes
+(`kind: "worker"`).
+
+### `GET /admin/telephony` — needs centre_manager
+
+```ts
+type TelephonyStatus = {
+  provider: "exotel" | "twilio" | "plivo" | "simulator";
+  mode: "live" | "simulator";   // simulator: calls are answered from the browser page, nothing is dialled
+  configured: boolean; inboundNumber: string | null;   // the DID, masked to the last 4 digits
+  remedy: string | null;        // what to set when not configured
+  browserCallUrl: string | null;  // the worker's /dev/call page, development only
+};
+```
+
+## Calls — the list moves next to the detail
+
+### `GET /admin/calls` — needs centre_manager
+
+Same query parameters as before plus `is_test` (`true`/`false`; default both).
+`CallRow` gains `isTest: boolean`, `summaryHi: string | null`, `intents: string[]`,
+`transferred: boolean`, `recordingAvailable: boolean`. The legacy `/admin/*`
+routes the panel never called are removed.
+
+### `GET /admin/calls/{id}` — unchanged, plus
+
+`CallDetail` gains `isTest: boolean`, `intents: string[]` and
+`stats: {turns, farmerTurns, agentTurns, cachedReplies, toolCalls, llmModel: string | null}`.
+`recording.available` is true once the post-call job has stored the audio; in
+development recordings live on the local disk (`STORAGE_BACKEND=local`) and
+stream through the same route.
+
+### `POST /admin/calls/{id}/summarise` — needs centre_manager
+
+Re-runs the post-call summary for one call (a model call). → `CallDetail`.
+
+## Flows — the inbound prompt is editable
+
+`FlowDetail.systemPrompt` is the inbound persona. `POST /admin/flows/{id}/versions`
+and `PATCH /admin/flows/{id}` accept `systemPrompt?: string` for inbound flows
+(ignored for outbound; 422 when empty or over 12,000 characters). Publishing
+works as before; the voice worker reads the published row on every call, so a
+publish is live on the next call. `FlowDetail` gains `promptWordCount: number`
+and `defaults: {systemPrompt, greeting, closing}` (the seed wording, so an
+operator can restore it).
+
+## Knowledge — status, notes, re-index
+
+```ts
+type KnowledgeStatus = {
+  worker: { alive: boolean; lastSeenAt: string | null };   // the background worker heartbeat (Redis key uaagro:worker:heartbeat, refreshed every 60 s)
+  documents: { pending: number; indexing: number; indexed: number; failed: number };
+  chunks: number; embedded: number;
+  embeddingModel: string; retrievalMs: number | null;   // last measured search latency
+};
+```
+
+| Route | Needs | Body → Result |
+|---|---|---|
+| `GET /admin/knowledge/status` | agronomist | → `KnowledgeStatus` |
+| `POST /admin/knowledge/documents` | ops_manager | as before, **or** JSON `{text, title, scope?, language?}` — a typed note (`docType: "text"`). |
+| `POST /admin/knowledge/documents/{id}/reindex` | ops_manager | → `KbDocumentRow` (`ingestStatus: "pending"`) |
+
+`KbDocumentRow` gains `sizeBytes: number | null`, `indexedAt: string | null` and
+`wordCount: number | null`. When the queue cannot be reached, the API indexes the
+document itself in the background (`ingestError` reads `"indexed inline"` while
+it runs) — a document is never left silently pending.
+
+## Centres — the primary centre and the map
+
+`CentreRow` gains `isPrimary: boolean` (the head office; the helpline answers
+stock and price for this centre when the caller's own centre is unknown, and
+says so), `addressSpoken: string | null`, `services: string[]` and
+`stockOuts: number`. `POST`/`PATCH /admin/centres` accept `isPrimary`,
+`addressSpoken` and `services`. Exactly one active centre is primary; setting it
+on another clears the previous one. `GET /admin/centres/nearest?lat=&lng=` (needs
+centre_manager) → `{centre: CentreRow, distanceKm}`.
+
+## Outbound — call these numbers now
+
+### `POST /admin/dial` — needs ops_manager
+
+```ts
+Body: { numbers: string; flowId?: string; name?: string; consentAttested: true; consentNote?: string }
+→ { campaign: CampaignSummary; imported: number; invalid: string[]; removedBy: {check: string; count: number}[]; started: boolean; blockedBy: string[] }
+```
+
+Creates a campaign named `name` (default "Quick dial <date time>"), runs the
+compliance gate, approves it and starts the dialer in one step. The four-eyes
+rule is waived for quick dials when `OUTBOUND_QUICK_DIAL_SELF_APPROVE=true`
+(default in development, false in production — then `started` is false and the
+campaign waits for approval). When the gate blocks, `started` is false and
+`blockedBy` says why.
+
+`Contact` gains `answerUrl: string | null`: in simulator mode the worker's
+browser page answers the call (`/dev/call?answer=<contactId>`); null otherwise.
+`Contact.status` gains `"ringing"`.
+
+## Data — the client's MySQL database as a source
+
+The platform's own database stays PostgreSQL (row-level security, vector search
+and partitioning depend on it). A **data source** is the client's MySQL
+database, read directly: stores, products and stock are pulled into the
+catalogue on demand or on a schedule, and the agent answers from the copy.
+
+```ts
+type TableMap = { table: string; columns: Record<string, string> };   // our field → their column
+type SourceMapping = { stores: TableMap | null; products: TableMap | null; stock: TableMap | null };
+type SyncRun = {
+  id: string; startedAt: string; finishedAt: string | null;
+  status: "running" | "ok" | "failed";
+  stores: number; products: number; stock: number;   // rows written
+  error: string | null;
+};
+type DataSource = {
+  id: string; name: string; kind: "mysql";
+  host: string; port: number; database: string; user: string; tls: boolean;
+  hasPassword: boolean;                     // the password itself is never returned
+  mapping: SourceMapping; schedule: "manual" | "hourly" | "daily";
+  lastRun: SyncRun | null; createdAt: string; updatedAt: string;
+};
+```
+
+Our fields per table (the mapping screen offers exactly these; `*` = required):
+
+- stores: `code`*, `name`*, `name_hi`, `district`*, `block`, `address`, `pincode`,
+  `latitude`, `longitude`, `phone`, `manager_name`, `manager_phone`, `open_time`, `close_time`
+- products: `sku`*, `name`*, `name_hi`, `category`* (`seeds | fertilisers | crop_protection | cattle_feed | tools_equipment`, or any text the sync maps by keyword), `brand`, `pack_size`* (e.g. "50 kg", "1 L" — number and unit are split), `mrp`*, `description`
+- stock: `store_code`*, `sku`*, `qty`*, `price`, `is_available`
+
+| Route | Needs | Body → Result |
+|---|---|---|
+| `GET /admin/data/sources` | ops_manager | → `DataSource[]` |
+| `POST /admin/data/sources` | super_admin | `{name, host, port?, database, user, password, tls?, mapping?, schedule?}` → `DataSource` (the password is encrypted at rest with the platform data key; never logged) |
+| `PATCH /admin/data/sources/{id}` | super_admin | any subset; `password` replaces → `DataSource` |
+| `DELETE /admin/data/sources/{id}` | super_admin | 204 |
+| `POST /admin/data/sources/test` | super_admin | `{host, port?, database, user, password, tls?}` → `ConnectionReport` (nothing stored) |
+| `POST /admin/data/sources/{id}/test` | super_admin | → `ConnectionReport` |
+| `GET /admin/data/sources/{id}/tables/{table}/columns` | super_admin | → `{columns: {name, type}[], sample: Record<string, unknown>[]}` (first 5 rows, for the mapping screen) |
+| `POST /admin/data/sources/{id}/sync` | ops_manager | → `SyncRun` (202; runs in the background; poll `/runs`) |
+| `GET /admin/data/sources/{id}/runs` | ops_manager | → `SyncRun[]` newest first, max 20 |
+
+```ts
+type ConnectionReport = { ok: boolean; latencyMs: number | null; serverVersion: string | null; tables: {name: string; rows: number | null}[]; error: string | null };
+```
+
+Sync semantics: stores upsert by `code`, products by `sku` (one variant per pack
+size), stock by (store, variant). Nothing is deleted by a sync; a product
+missing from the source keeps its last known stock and is reported in the run.
+Every run is audited.
+
+## Security notes for the panel
+
+- `GET /metrics` on both services needs the internal token (`x-internal-token`) outside development.
+- `/docs` and `/openapi.json` exist only in development.
+- Every response carries `Cache-Control: no-store`.
+- Data-source writes, prompt publishes and quick dials are in the audit log.

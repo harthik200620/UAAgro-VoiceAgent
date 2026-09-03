@@ -1,17 +1,17 @@
 """The post-call pipeline (§11.5).
 
 Runs in the background within 30 seconds of a call ending: consolidate the
-transcript, upload the recording, summarise, extract entities, set the outcome,
-compute cost and latency, create or update tickets, notify the centre manager,
-update the farmer profile, push metrics.
+transcript, confirm the recording, summarise, extract entities, set the
+outcome, compute cost and latency, create or update tickets, notify the centre
+manager, update the farmer profile, push metrics.
 
 Two properties from §11.5 shape the whole design.
 
 **Every stage is idempotent and retried with backoff.** A stage that ran twice
-must produce the same result as running once -- the recording key is derived
-from the call reference so a retry overwrites, and the ticket lookup is by call
-id so a retry finds the existing row rather than raising a second one. A farmer
-called back twice about one complaint learns the system is not paying attention.
+must produce the same result as running once -- the summary is skipped once it
+exists, and the ticket lookup is by call id so a retry finds the existing row
+rather than raising a second one. A farmer called back twice about one
+complaint learns the system is not paying attention.
 
 **A failure here never loses the call record.** The `calls` row was written
 incrementally *during* the call (§1 N8), so everything below is enrichment. That
@@ -42,6 +42,7 @@ from uaagro_domain.enums import CallOutcome, ContactStatus, TicketPriority, Tick
 from uaagro_domain.livefeed import CAMPAIGN_UPDATED, CONTACT_UPDATED, LiveEvent, LiveFeed
 
 from .contacts import contact_result_from_call, panel_status
+from .summary import Summariser, summarise_call
 
 log = structlog.get_logger(__name__)
 
@@ -72,15 +73,10 @@ class PipelineReport:
 
     def summary(self) -> str:
         ok = sum(1 for s in self.stages if s.ok)
-        return (
-            f"{self.call_ref}: {ok}/{len(self.stages)} stages in "
-            f"{self.elapsed_s:.1f}s"
-            + (f", failed: {', '.join(s.name for s in self.failed)}" if self.failed else "")
+        return f"{self.call_ref}: {ok}/{len(self.stages)} stages in {self.elapsed_s:.1f}s" + (
+            f", failed: {', '.join(s.name for s in self.failed)}" if self.failed else ""
         )
 
-
-Summariser = Callable[[str, str], Awaitable[tuple[str, str]]]
-"""``(transcript, language) -> (hindi_summary, english_summary)``."""
 
 Notifier = Callable[[uuid.UUID, str], Awaitable[None]]
 """``(centre_id, message) -> None``. WhatsApp or email (§11.5)."""
@@ -92,7 +88,6 @@ async def run(
     *,
     summarise: Summariser | None = None,
     notify: Notifier | None = None,
-    upload_recording: Callable[[Call], Awaitable[str | None]] | None = None,
     live_feed: LiveFeed | None = None,
 ) -> PipelineReport:
     """Run every §11.5 stage for one call.
@@ -111,9 +106,9 @@ async def run(
     # partial key rather than returning None, so every run would fail.
     call = await session.scalar(select(Call).where(Call.id == call_id))
     if call is None:
-        return PipelineReport(call_ref=str(call_id), stages=[
-            StageResult("load", ok=False, detail="call not found")
-        ])
+        return PipelineReport(
+            call_ref=str(call_id), stages=[StageResult("load", ok=False, detail="call not found")]
+        )
 
     report = PipelineReport(call_ref=call.call_ref)
 
@@ -135,7 +130,7 @@ async def run(
     # Before the summary: somebody may be waiting on a callback the agent
     # committed to out loud, and a summary nobody has read is worth less.
     await stage("tickets", lambda: _ensure_ticket(session, call))
-    await stage("recording", lambda: _upload(call, upload_recording))
+    await stage("recording", lambda: _recording(call))
     await stage("cost", lambda: _finalise_cost(call))
     await stage("summary", lambda: _summarise(session, call, summarise))
     await stage("farmer", lambda: _update_farmer(session, call))
@@ -310,24 +305,20 @@ async def _ensure_ticket(session: AsyncSession, call: Call) -> str:
     return f"created {ticket.ticket_ref}"
 
 
-async def _upload(
-    call: Call, upload: Callable[[Call], Awaitable[str | None]] | None
-) -> str:
-    """§11.5's recording upload.
+async def _recording(call: Call) -> str:
+    """§11.5's recording, as the voice worker left it.
 
-    Idempotent because the object key is derived from the call reference, so a
-    retry overwrites rather than accumulating copies -- and an auditor asked
-    which copy is real has one answer.
+    The media path writes the recording itself when the call ends and puts
+    the object key on the row; this stage reports what it found rather than
+    uploading anything, so the report says which calls have no audio -- a
+    simulator run, or a worker whose store was down.
     """
-    if upload is None:
-        return "no uploader configured"
+    # The key is reported by presence only, never by value: a key in a log
+    # line is a step from a URL, and §23-6 treats a recording URL like a
+    # phone number.
     if call.recording_object_key:
-        return "already uploaded"
-    key = await upload(call)
-    if key:
-        call.recording_object_key = key
-    # The key, never a URL. §23-6 treats a recording URL like a phone number.
-    return key or "nothing to upload"
+        return "stored by the worker"
+    return "no recording"
 
 
 async def _finalise_cost(call: Call) -> str:
@@ -377,9 +368,7 @@ def _as_decimal(value: object) -> Decimal | None:
     return None if amount.is_nan() or amount.is_infinite() else amount
 
 
-async def _summarise(
-    session: AsyncSession, call: Call, summarise: Summariser | None
-) -> str:
+async def _summarise(session: AsyncSession, call: Call, summarise: Summariser | None) -> str:
     """§11.5: Hindi *and* English summaries.
 
     Both, because the audiences differ: a centre manager in Barabanki reads the
@@ -390,27 +379,7 @@ async def _summarise(
         return "no summariser configured"
     if call.summary_hi:
         return "already summarised"
-
-    turns = (
-        await session.scalars(
-            select(CallTurn).where(CallTurn.call_id == call.id).order_by(CallTurn.turn_index)
-        )
-    ).all()
-    if not turns:
-        return "no turns to summarise"
-
-    # The *original* transcript, not the normalised one. Normalisation expands
-    # numbers into words for the TTS ("बारह सौ पचास"), and a summary built from
-    # that reads as though the farmer spoke in words when they said "1250".
-    transcript = "\n".join(
-        f"{turn.role.value}: {turn.text_original}"
-        for turn in turns
-        if turn.text_original
-    )
-    hindi, english = await summarise(transcript, call.language_final or "hi-IN")
-    call.summary_hi = hindi
-    call.summary_en = english
-    return f"{len(turns)} turns summarised"
+    return await summarise_call(session, call, summarise)
 
 
 async def _update_farmer(session: AsyncSession, call: Call) -> str:

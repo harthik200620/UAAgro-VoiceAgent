@@ -68,11 +68,20 @@ TRIGRAM_INDEXES = ("ix_products_name_hi_trgm", "ix_products_name_en_trgm")
 #: while a database migrated earlier would take the 0005 path. Two databases,
 #: same revision history, different schemas.
 POST_0001_COLUMNS: dict[str, tuple[str, ...]] = {
-    "campaigns": ("is_promotional", "dlt_entity_id"),
+    "campaigns": ("is_promotional", "dlt_entity_id", "self_approved"),
     # Revision 0007: the operations panel.
     "agent_configs": ("script",),
-    "centres": ("manager_name",),
-    "kb_documents": ("ingest_status", "ingest_error", "page_count", "scope"),
+    # Revision 0009: the head office.
+    "centres": ("manager_name", "is_primary"),
+    "kb_documents": (
+        "ingest_status",
+        "ingest_error",
+        "page_count",
+        "scope",
+        "size_bytes",
+        "word_count",
+        "indexed_at",
+    ),
     "campaign_contacts": ("call_id",),
 }
 
@@ -84,7 +93,7 @@ POST_0001_COLUMNS: dict[str, tuple[str, ...]] = {
 #: then never receive the table, while a fresh one would get it from revision
 #: 0001, and the two would disagree about what "0001" means. Pinning the set
 #: here keeps every revision reproducible.
-POST_0001_TABLES = ("orders", "order_items")
+POST_0001_TABLES = ("orders", "order_items", "data_sources", "data_source_runs")
 
 
 # --------------------------------------------------------------------------- #

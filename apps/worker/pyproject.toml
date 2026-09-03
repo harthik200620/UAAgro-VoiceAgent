@@ -19,10 +19,18 @@ dependencies = [
     "uvloop>=0.21; sys_platform != 'win32'",
     "uaagro-domain",
     "uaagro-db",
+    # Ingestion runs the media path's extractor and embedder, and the post-call
+    # summary runs on its LLM gateway (§6.1): one implementation of each, not a
+    # second copy that drifts.
+    "uaagro-voice-worker",
     "arq>=0.26",
     "redis>=5.2",
     "structlog>=24.4",
     "httpx>=0.28",
+    # Scheduled catalogue pulls from the client's MySQL (worker.sync) run the
+    # API's source service, so the worker needs that package and its driver.
+    "aiomysql>=0.2",
+    "uaagro-api",
 ]
 
 [build-system]
@@ -35,3 +43,5 @@ packages = ["src/worker"]
 [tool.uv.sources]
 uaagro-domain = { workspace = true }
 uaagro-db = { workspace = true }
+uaagro-voice-worker = { workspace = true }
+uaagro-api = { workspace = true }

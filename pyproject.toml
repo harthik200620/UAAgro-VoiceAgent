@@ -46,6 +46,10 @@ dev = [
     # authz-matrix tests run on a machine with no Docker and no root. Test-only:
     # production is Postgres 16 on RDS, and the compose stack is unchanged.
     "pgserver>=0.1.4",
+    # A MySQL wire-protocol server in pure Python, so the real aiomysql client
+    # is exercised against tables served from lists: no MySQL install, no
+    # Docker. Test-only; the client's real server is whatever they run.
+    "mysql-mimic>=2.4",
 ]
 
 # ---------------------------------------------------------------- ruff

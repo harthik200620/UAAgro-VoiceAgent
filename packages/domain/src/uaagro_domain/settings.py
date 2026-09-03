@@ -431,6 +431,12 @@ class Settings(BaseSettings):
     internal_api_token: str | None = None
     #: Where the control plane reaches the voice worker for those calls.
     voice_worker_url: str = "http://localhost:8080"
+    #: Where a *browser* reaches the voice worker: the development call page
+    #: the panel links to, and the page that answers a simulated outbound
+    #: call. Separate from ``voice_worker_url`` because the two are the same
+    #: host only on a laptop -- in a compose stack the API reaches the worker
+    #: by service name and the operator's browser cannot.
+    voice_worker_public_url: str = "http://127.0.0.1:8080"
     #: Signs and verifies provider webhooks (§17). Absent means webhooks are
     #: refused rather than trusted -- an unauthenticated webhook can mark a call
     #: answered or a consent granted.
@@ -566,6 +572,11 @@ class Settings(BaseSettings):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
     s3_force_path_style: bool = True
+    #: Where objects live: ``local`` is a directory (development, tests, a
+    #: pilot with no bucket yet); ``s3`` is the bucket above. Production
+    #: refuses ``local`` -- see ``verify_production_readiness``.
+    storage_backend: str = "local"
+    storage_local_dir: Path = Path(".localdev/objects")
 
     # --- cryptography (§17) -------------------------------------------------- #
     #: Wraps the data key that encrypts stored phone numbers. Required in
@@ -592,6 +603,10 @@ class Settings(BaseSettings):
     max_concurrent_calls: int = 100
     #: §13.1's dialer pacing.
     outbound_calls_per_minute: int = 20
+    #: A quick dial from the panel is approved by the person who placed it
+    #: when this is true. Off in production, where §13's four-eyes rule holds
+    #: for every campaign; on in development so a demo can dial in one click.
+    outbound_quick_dial_self_approve: bool = True
 
     # --- observability ---------------------------------------------------- #
     otel_exporter_otlp_endpoint: str | None = None
@@ -689,6 +704,18 @@ class Settings(BaseSettings):
                 "SESSION_COOKIE_SECURE is false in a production environment.",
                 remedy="Set SESSION_COOKIE_SECURE=true so refresh cookies are never sent "
                 "over plaintext HTTP.",
+            )
+        if self.storage_backend == "local":
+            raise ConfigurationError(
+                "STORAGE_BACKEND=local in a production environment.",
+                remedy="Set STORAGE_BACKEND=s3 and the S3_* variables. A recording on a "
+                "container's disk vanishes with the container, and §18 requires it kept.",
+            )
+        if self.outbound_quick_dial_self_approve:
+            raise ConfigurationError(
+                "OUTBOUND_QUICK_DIAL_SELF_APPROVE is true in a production environment.",
+                remedy="Set OUTBOUND_QUICK_DIAL_SELF_APPROVE=false. §13's four-eyes rule "
+                "holds for every campaign in production, quick dials included.",
             )
 
 
