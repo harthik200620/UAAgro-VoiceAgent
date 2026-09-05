@@ -1,13 +1,43 @@
-# Two hostnames, two services. Everything else stays on the compose network.
+# The edge: TLS for two hostnames, and nothing else reachable from outside.
+#
+# Caddy obtains certificates from Let's Encrypt on first request and renews
+# them itself; ports 80 and 443 must be open to the world for that, and the
+# two names must resolve to this host before the stack starts. Everything
+# behind it stays on the compose network: the API, the database, Redis and the
+# object store have no published port.
 
-{$PANEL_HOST} {
-	encode zstd gzip
+{
+	# Expiry notices and the ACME account go here. Required.
+	email {$ACME_EMAIL}
+	# The admin endpoint is off: nothing reconfigures Caddy at runtime, and an
+	# open admin socket inside the container is one more thing to defend.
+	admin off
+	servers {
+		# Trust the forwarded headers only from the compose network. The
+		# services behind read X-Forwarded-For for the telephony allowlist.
+		trusted_proxies static private_ranges
+	}
+}
+
+(hardening) {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "geolocation=(), camera=(), payment=()"
 		-Server
+	}
+}
+
+# The control panel. The only thing a browser reaches; it talks to the API
+# server-side, so the API needs no public name at all.
+{$PANEL_HOST} {
+	import hardening
+	encode zstd gzip
+	# The largest thing the panel sends is a knowledge-base upload (25 MB).
+	request_body {
+		max_size 32MB
 	}
 	# Server-sent events must not be buffered on the way to the browser.
 	@events path /api/events/*
@@ -20,10 +50,24 @@
 	reverse_proxy admin:3000
 }
 
+# The voice worker. The telephony provider reaches the media WebSocket and,
+# for Twilio, the TwiML answer; a load balancer reaches the probes. The
+# worker's /internal routes answer to the API alone, on the compose network,
+# and /metrics to the scraper there.
 {$VOICE_HOST} {
-	# Only the media WebSocket and the probes. The worker's internal endpoints
-	# answer to the API alone, on the compose network.
-	@voice path /ws/voice /health/live /health/ready
-	reverse_proxy @voice voice-worker:8080
+	import hardening
+	# Nothing here takes a body worth speaking of: the media travels on the
+	# WebSocket, which this limit does not touch.
+	request_body {
+		max_size 1MB
+	}
+	@voice path /ws/voice /telephony/* /health/live /health/ready
+	reverse_proxy @voice voice-worker:8080 {
+		# A call is a long-lived socket; never time it out from the edge.
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
 	respond 404
 }

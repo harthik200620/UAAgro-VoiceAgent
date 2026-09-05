@@ -203,6 +203,25 @@ line names what the agent must do; anything else is a regression.
 | "कार्बेन्डाज़िम गेहूँ में डाल सकते हैं?", then "और धान में?" | "हाँ, ... गेहूँ के लिए है (गेहूँ और चना)", then "धान के लिए नहीं" with the paddy sprays offered |
 | "यूरिया गेहूँ में डाल सकते हैं?" | the model answers from the knowledge base -- not a stock figure |
 | "बाजरा के लिए क्या है?" | "बाजरा के लिए अभी कुछ नहीं है ..." -- the crop is recognised even with nothing in the catalogue |
+
+## 9. Security, on the deployed host (added 5 September 2026)
+
+`docs/SECURITY.md` says what is protected. These are the checks that prove it
+from outside, once the stack is up:
+
+| Do | Expect |
+|---|---|
+| `curl -I http://panel.<domain>/` | a 308 to `https://` |
+| `curl -sI https://panel.<domain>/en \| grep -i strict-transport` | `max-age=31536000; includeSubDomains` |
+| `curl -s https://voice.<domain>/internal/speech` | 404 (the edge does not route it) |
+| `curl -s -o /dev/null -w '%{http_code}' https://voice.<domain>/ws/voice` | 403 or 1008 close: no token, wrong address |
+| `curl -X POST -H 'Content-Length: 40000000' https://panel.<domain>/api/…` | 413 at the edge |
+| In the panel, add a website `http://169.254.169.254/` to the knowledge base | refused, naming the rule, before any fetch |
+| In the panel, test a data source at host `postgres` or `127.0.0.1` | refused |
+| `docker compose … exec api touch /x` | `Read-only file system` |
+| `docker compose … exec api cat /proc/1/status \| grep Cap` | `CapEff: 0000000000000000` |
+| `nmap -p- <host>` from outside | 22, 80, 443 only |
+| `make preflight` with one `FILL_ME` left | one error naming it, exit 1 |
 | "बीज चाहिए", then "धान" | list four seeds, then the two paddy seeds -- no hand-over |
 | "सबका रेट बता दो" after a list | read every price, then still accept "दूसरा" |
 | "उसका प्राइस" after a list | read every price |

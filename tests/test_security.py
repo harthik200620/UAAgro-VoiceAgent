@@ -317,3 +317,38 @@ def test_devanagari_survives_serialisation_unescaped() -> None:
         request_id=None,
     )
     assert "डीएपी".encode() in payload
+
+
+def test_production_may_keep_the_data_key_locally_only_when_told_to() -> None:
+    """A cloud host with no KMS says so explicitly; the key is then required
+    from the environment, and KMS_KEY_ID is not."""
+    dek = base64.b64encode(b"K" * 32).decode()
+    base: dict[str, object] = {
+        "app_env": "production",
+        "kms_key_id": None,
+        # Explicit, so a LOCAL_DEK_BASE64 in the developer's shell cannot
+        # satisfy the case that must fail.
+        "local_dek_base64": None,
+        "phone_hash_pepper": base64.b64encode(b"P" * 32).decode(),
+        "jwt_signing_key": base64.b64encode(b"J" * 32).decode(),
+        "telephony_ws_token": "test-ws-token-not-a-secret",
+        "internal_api_token": "test-internal-token-not-a-secret",
+        "session_cookie_secure": True,
+        "storage_backend": "s3",
+        "outbound_quick_dial_self_approve": False,
+    }
+    explicit = Settings(**{**base, "allow_local_dek_in_production": True, "local_dek_base64": dek})
+    explicit.verify_production_readiness()
+    cipher = build_cipher(explicit)
+    assert isinstance(cipher._keys, LocalKeyProvider)
+
+    without_key = Settings(**{**base, "allow_local_dek_in_production": True})
+    with pytest.raises(MissingCredentialError) as caught:
+        without_key.verify_production_readiness()
+    assert caught.value.variable == "LOCAL_DEK_BASE64"
+
+    # The flag off, the requirement is unchanged: KMS or nothing.
+    silent = Settings(**{**base, "local_dek_base64": dek})
+    with pytest.raises(MissingCredentialError) as caught:
+        silent.verify_production_readiness()
+    assert caught.value.variable == "KMS_KEY_ID"

@@ -591,8 +591,25 @@ class Settings(BaseSettings):
     #: rotating it orphans every farmer row.
     phone_hash_pepper: str | None = None
     #: Development data key, base64, 32 bytes. In production the DEK is wrapped
-    #: by KMS and this is ignored.
+    #: by KMS and this is ignored -- unless ``allow_local_dek_in_production``
+    #: says the host has no KMS.
     local_dek_base64: str | None = None
+    #: A single-host install on a cloud with no key-management service keeps
+    #: the data key in the environment instead of in KMS. Explicit, because it
+    #: is weaker: whoever reads the host's environment reads every phone
+    #: number. Off by default; production refuses to start without one or the
+    #: other.
+    allow_local_dek_in_production: bool = False
+    #: The Data page connects to the client's MySQL server. Public addresses
+    #: only, unless the client's database sits on a private network reached
+    #: over a VPN or peering -- then the operator says so here. Addresses of
+    #: this host and the metadata range are refused either way.
+    sources_allow_private_networks: bool = False
+    #: Requests a minute one address may make of the control-plane API before
+    #: it is told to slow down. Sign-in has its own, stricter limits. 0 turns
+    #: the ceiling off -- for the test suite, which is one address making
+    #: thousands of requests on purpose.
+    api_rate_limit_per_minute: int = 600
     jwt_signing_key: str | None = None
     #: §17: the refresh cookie is `Secure` everywhere except local http.
     #: `verify_production_readiness` refuses to start a production process with
@@ -696,7 +713,6 @@ class Settings(BaseSettings):
         if not self.is_production:
             return
         required = {
-            "kms_key_id": "envelope encryption of stored phone numbers",
             "phone_hash_pepper": "the farmer phone lookup index",
             "jwt_signing_key": "admin session signing",
             "telephony_ws_token": "authenticating the telephony media WebSocket",
@@ -704,6 +720,14 @@ class Settings(BaseSettings):
         }
         for field, needed_for in required.items():
             self.require(field, needed_for=needed_for)
+        if self.allow_local_dek_in_production:
+            self.require(
+                "local_dek_base64",
+                needed_for="encrypting stored phone numbers without a KMS "
+                "(ALLOW_LOCAL_DEK_IN_PRODUCTION is set)",
+            )
+        else:
+            self.require("kms_key_id", needed_for="envelope encryption of stored phone numbers")
         if not self.session_cookie_secure:
             raise ConfigurationError(
                 "SESSION_COOKIE_SECURE is false in a production environment.",

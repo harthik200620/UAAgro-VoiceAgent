@@ -1816,6 +1816,75 @@ followed from reading that honestly:
   "Bispyribac Sodium 10% SC" (`Lexicon._by_head`): unique heads of six
   letters or more, none where two products share one ("Calcium ...").
 
+## Deployable as it stands: TLS at the edge, one host, one afternoon (5 September 2026)
+
+The production shape was already drawn -- Caddy in front, nothing else
+published, non-root images, boot-time refusal of a weak configuration -- but
+a fresh host would not have come up from it. What was missing, and is now
+there:
+
+* **The image built.** The workspace gained `apps/demo` and the shared
+  `Dockerfile.python` copied every member's manifest but that one, so
+  `uv sync --frozen` refused the lockfile in the dependency layer. The
+  manifest is copied; the layer was replayed locally with exactly the
+  Dockerfile's file set and resolves.
+* **The edge lets the provider in.** The voice hostname allowed `/ws/voice`
+  and the probes; Twilio's `/telephony/twiml` answer was a 404 at the edge.
+  `/telephony/*` is allowed. The Caddyfile also gained an ACME account
+  email, `admin off`, HTTP/3, the hardening headers on both hosts and
+  unbounded read/write timeouts on the media socket -- a call is a
+  long-lived connection and the edge must never be the one to cut it.
+* **A preflight that runs before Docker.** `scripts/deploy_preflight.py`
+  reads the same `.env` the stack will and refuses a placeholder, a
+  plaintext public URL, a `localhost` database address, a short secret, a
+  missing control, and -- with `--check-dns` -- a hostname that does not
+  resolve to the host (the cause of every "Caddy loops on certificates"
+  first start). Standard library only, so it runs in `python:3.12-slim` on a
+  host with nothing installed. Values are never printed.
+* **The first start is one command.** `infra/deploy/bootstrap.sh` installs
+  Docker, sets the firewall to SSH/80/443, turns on unattended security
+  updates, runs the preflight, builds, starts, migrates, seeds, and waits for
+  both hostnames to answer over the certificates Caddy just obtained.
+  `deploy.sh` does every later release (pull, preflight, build, roll,
+  migrate, health); `backup.sh` puts a nightly dump next to the recordings.
+* **A production env template that is complete.** `infra/deploy/production.env.example`
+  carries the two hostnames, the compose-internal addresses, `https://`
+  public URLs and every production-only control, so filling the `FILL_ME`s
+  is the whole job. `.env.example` stays the development file.
+* **A data key without a KMS, said out loud.** Production required
+  `KMS_KEY_ID`, which a VM on a cloud with no key service cannot supply.
+  `ALLOW_LOCAL_DEK_IN_PRODUCTION=true` with `LOCAL_DEK_BASE64` is accepted
+  instead, checked at boot and by the preflight, and logged once at start
+  (`crypto.local_dek_in_production`) so a later reader knows where the key
+  lives. Off, the requirement is unchanged.
+
+What could not be verified on this machine: there is no Docker here, so the
+compose stack has not been brought up locally. What was verified: both
+compose files parse and only Caddy publishes ports; the Caddyfile's
+placeholders are exactly the three the compose file supplies; the Docker
+dependency layer resolves from the copied manifests; the three shell scripts
+pass `bash -n`; the preflight passes a filled env, rejects the template with
+every placeholder named, and names each fault in a deliberately broken env;
+the secret scan passes over the new files; the boot-time checks are under
+test. `docs/DEPLOY.md` §0 is the short version.
+
+## Security review, 5 September 2026
+
+The question was whether the whole application is secure. The answer, with
+the evidence, is `docs/SECURITY.md`: the model (who reaches what, through
+which control), the controls by layer, the six findings of the review and
+their fixes, and what sits outside the software. The findings, briefly:
+the knowledge crawler and the client-database connector could be pointed
+at addresses inside the deployment (`uaagro_domain.netsafety` now refuses
+them, redirects included); the contact upload had no ceiling; the API had
+no body-size or per-address rate ceiling; containers ran with default
+capabilities on writable roots; three panel dependencies had published
+vulnerabilities. Verified unchanged: no string-built SQL reaches user
+input, every panel route needs a role, TOTP is mandatory, tokens compare
+in constant time, the browser holds no API credential. `tests/test_hardening.py`
+pins each fix; `docs/VERIFICATION.md` §9 proves them from outside a
+deployed host.
+
 ## An upgrade pass, 4 September 2026 (afternoon)
 
 The brief asked for the backend to be "changed to Flask" and, in the same

@@ -36,6 +36,7 @@ import httpx
 import structlog
 
 from uaagro_domain.errors import ValidationError
+from uaagro_domain.netsafety import ensure_reachable_target
 
 log = structlog.get_logger(__name__)
 
@@ -60,6 +61,9 @@ DEFAULT_MAX_PAGES = 100
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 CRAWL_TIMEOUT_S = 15.0
 USER_AGENT = "UAAgro-KnowledgeBase/1.0 (+helpline knowledge import)"
+#: Redirects are followed by hand so every hop is checked against the same
+#: rule as the first address; this many is a loop.
+MAX_REDIRECTS = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,6 +345,50 @@ def _same_site(base: str, candidate: str) -> str | None:
     return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
 
+async def _fetch_page(http: httpx.AsyncClient, start: str, page_url: str) -> str | None:
+    """One page's HTML, or None when it is not there, not HTML, or not safe.
+
+    Redirects are followed by hand: each destination must stay on the site
+    and pass the public-address check, so a page that redirects to
+    ``http://169.254.169.254/`` is dropped rather than fetched.
+    """
+    url = page_url
+    for _ in range(MAX_REDIRECTS + 1):
+        try:
+            async with http.stream("GET", url) as response:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("location")
+                    target = _same_site(start, location) if location else None
+                    if target is None:
+                        return None
+                    host = urlsplit(target).hostname or ""
+                    try:
+                        ensure_reachable_target(host, purpose="the knowledge crawler")
+                    except ValidationError:
+                        log.info("extract.redirect_refused")
+                        return None
+                    url = target
+                    continue
+                if response.status_code != 200:
+                    return None
+                if "html" not in response.headers.get("content-type", ""):
+                    return None
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in response.aiter_bytes():
+                    size += len(chunk)
+                    if size > MAX_PAGE_BYTES:
+                        chunks.append(chunk[: MAX_PAGE_BYTES - (size - len(chunk))])
+                        break
+                    chunks.append(chunk)
+                encoding = response.encoding or "utf-8"
+                return b"".join(chunks).decode(encoding, "replace")
+        except httpx.HTTPError as exc:
+            log.info("extract.page_unreachable", error=type(exc).__name__)
+            return None
+    return None
+
+
 async def fetch_site(
     url: str, *, max_pages: int = DEFAULT_MAX_PAGES, client: httpx.AsyncClient | None = None
 ) -> Extracted:
@@ -356,10 +404,15 @@ async def fetch_site(
             f"{url!r} is not a web address that can be read.",
             remedy="Give the full address, starting with https://",
         )
+    # §17: the crawler runs inside the deployment. The address it is given,
+    # and every address a redirect sends it to, must be public -- never the
+    # database, the object store, another service, or the cloud's metadata
+    # endpoint. Refused before the first byte is requested.
+    ensure_reachable_target(urlsplit(start).hostname or "", purpose="the knowledge crawler")
     owned = client is None
     http = client or httpx.AsyncClient(
         timeout=CRAWL_TIMEOUT_S,
-        follow_redirects=True,
+        follow_redirects=False,
         headers={"user-agent": USER_AGENT},
     )
     queue: deque[str] = deque([start])
@@ -369,17 +422,10 @@ async def fetch_site(
     try:
         while queue and len(sections) < max_pages:
             page_url = queue.popleft()
-            try:
-                response = await http.get(page_url)
-            except httpx.HTTPError as exc:
-                log.info("extract.page_unreachable", error=type(exc).__name__)
+            fetched = await _fetch_page(http, start, page_url)
+            if fetched is None:
                 continue
-            if response.status_code != 200:
-                continue
-            content_type = response.headers.get("content-type", "")
-            if "html" not in content_type:
-                continue
-            body = response.content[:MAX_PAGE_BYTES].decode(response.encoding or "utf-8", "replace")
+            body = fetched
             page = _Page()
             page.feed(body)
             text = page.markdown()

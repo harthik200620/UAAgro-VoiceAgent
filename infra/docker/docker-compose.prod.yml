@@ -11,8 +11,12 @@
 #   database, Redis and MinIO are reachable only on the compose network.
 # - No simulator, no LiteLLM, no seed. Migrations run; seeding is a one-off
 #   `docker compose ... run --rm migrate uaagro-db seed` on a fresh install.
-# - Images are pinned by digest where they come from a registry; the three
-#   services built from this repository share one image (see Dockerfile.python).
+# - The three services built from this repository share one image (see
+#   Dockerfile.python); registry images are pinned to a release tag.
+# - `scripts/deploy_preflight.py` reads the same .env and refuses to let the
+#   stack start with a placeholder, a plaintext URL or a missing control.
+#   `infra/deploy/bootstrap.sh` does the whole first start on a fresh Ubuntu
+#   host; `infra/deploy/deploy.sh` does every later one.
 #
 # Sizing for 30 concurrent calls: 4 vCPU / 8 GB for the voice worker (the
 # embedding model and the audio loop), 2 vCPU / 4 GB for everything else. For
@@ -21,7 +25,23 @@
 
 name: uaagro
 
+# §17: every container runs without the ability to gain privileges or use
+# a kernel capability, and with a root filesystem it cannot write to where
+# the process never needs to. A compromised process then cannot install
+# anything, and cannot become root.
+x-hardened: &hardened
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+
 x-python-image: &python-image
+  <<: *hardened
   build:
     context: ../..
     dockerfile: infra/docker/Dockerfile.python
@@ -30,20 +50,23 @@ x-python-image: &python-image
   env_file:
     - path: ../../.env
       required: true
-  logging:
-    driver: json-file
-    options:
-      max-size: "50m"
-      max-file: "5"
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m,mode=1777
 
 services:
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_DB: uaagro
       POSTGRES_USER: uaagro
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # Password hashing on the wire and at rest: scram, never md5.
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=scram-sha-256
     command:
       - postgres
       - -c
@@ -54,7 +77,6 @@ services:
       - log_min_duration_statement=250
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U uaagro -d uaagro"]
       interval: 10s
@@ -69,6 +91,10 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     command:
       - redis-server
       - --appendonly
@@ -90,6 +116,8 @@ services:
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     command: ["server", "/data"]
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
@@ -167,7 +195,11 @@ services:
     expose:
       - "8080"
     # The embedding model (~1.1 GB) lives on a volume so a redeploy does not
-    # download it again.
+    # download it again. The model libraries cache under HF_HOME, which is
+    # pointed into the same volume: with a read-only root there is nowhere
+    # else they could write.
+    environment:
+      HF_HOME: /app/models/.hf
     volumes:
       - models:/app/models
     # Drain, never kill (§20).
@@ -182,6 +214,10 @@ services:
       - --proxy-headers
       - --forwarded-allow-ips
       - "*"
+      # A media frame is well under a kilobyte of base64; a message this large
+      # is not audio.
+      - --ws-max-size
+      - "262144"
     healthcheck:
       test:
         - CMD
@@ -204,17 +240,25 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    environment:
+      HF_HOME: /app/models/.hf
     volumes:
       - models:/app/models
     stop_grace_period: 60s
     command: ["arq", "worker.tasks.WorkerSettings"]
 
   admin:
+    <<: *hardened
     build:
       context: ../../apps/admin
       dockerfile: ../../infra/docker/Dockerfile.admin
     image: uaagro/admin:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    # Next writes only its cache at runtime; that is the one writable path.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/.next/cache:size=256m,uid=1001,gid=1001
     environment:
       API_BASE_URL: http://api:8000
       ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:?set ADMIN_SESSION_SECRET in .env}
@@ -231,12 +275,32 @@ services:
   caddy:
     image: caddy:2.9-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # Ports 80 and 443 only.
+      - NET_BIND_SERVICE
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"
+    healthcheck:
+      # Any HTTP answer on :80 (the redirect to https counts) means Caddy is up.
+      test: ["CMD-SHELL", "wget -S --spider http://127.0.0.1/ 2>&1 | grep -q 'HTTP/'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       PANEL_HOST: ${PANEL_HOST:?set PANEL_HOST in .env, e.g. panel.uaagro.in}
       VOICE_HOST: ${VOICE_HOST:?set VOICE_HOST in .env, e.g. voice.uaagro.in}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env -- certificate expiry notices go there}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

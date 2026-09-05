@@ -32,6 +32,8 @@ from typing import Any, Protocol
 import aiomysql  # type: ignore[import-untyped]
 
 from uaagro_domain.errors import NotFoundError, UAAgroError, ValidationError
+from uaagro_domain.netsafety import ensure_reachable_target
+from uaagro_domain.settings import get_settings
 
 #: How long a connection attempt may take, handshake included.
 CONNECT_TIMEOUT_S = 5.0
@@ -262,6 +264,19 @@ async def connect(spec: ConnectionSpec) -> AsyncIterator[MySQLClient]:
     ``wait_for`` around it bounds the handshake too, so a server that accepts
     the socket and then says nothing is reported rather than waited on.
     """
+    # §17: the address came from the Data page. It may be the client's
+    # server on the internet or, if the deployment says so, on a private
+    # network -- never this host, another service, or the metadata endpoint.
+    # A developer's laptop (and the test suite's embedded server) is the one
+    # place a database on 127.0.0.1 is the client's database, so the check
+    # applies to deployments only.
+    settings = get_settings()
+    if settings.is_production:
+        ensure_reachable_target(
+            spec.host,
+            purpose="the data source connection",
+            allow_private_networks=settings.sources_allow_private_networks,
+        )
     try:
         connection = await asyncio.wait_for(
             aiomysql.connect(

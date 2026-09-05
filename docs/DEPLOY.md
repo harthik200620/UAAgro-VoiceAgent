@@ -4,6 +4,41 @@ One virtual machine runs the whole platform for up to 30 concurrent calls.
 Everything below is what an engineer does once; after that the customer runs
 the business from the panel and never touches a server.
 
+## 0. The short version (added 4 September 2026)
+
+Any cloud, one Ubuntu 24.04 VM, two DNS names, one afternoon:
+
+```bash
+git clone <this repository> uaagro && cd uaagro
+cp infra/deploy/production.env.example .env      # fill every FILL_ME
+make preflight                                   # refuses placeholders, plaintext URLs, missing controls
+sudo infra/deploy/bootstrap.sh                   # Docker, firewall, build, start, migrate, seed, TLS
+```
+
+`bootstrap.sh` ends by fetching `https://panel.<domain>/en` and
+`https://voice.<domain>/health/ready` over the certificates Caddy just
+obtained, and prints the next steps. Every later release is
+`infra/deploy/deploy.sh` (or `make deploy`): pull, preflight, build, roll,
+migrate, health. Nightly `infra/deploy/backup.sh` puts a database dump in the
+recordings bucket.
+
+### What "secure" means here
+
+| Layer | What is in place |
+|---|---|
+| Transport | Caddy terminates TLS for both hostnames with Let's Encrypt certificates it obtains and renews itself; HTTP redirects to HTTPS; HSTS for a year; HTTP/3 on 443/udp. The media stream is `wss://`. |
+| Exposure | Only Caddy publishes ports (80, 443). The API, Postgres, Redis, MinIO and the worker's `/internal` routes are on the compose network only. The voice hostname answers `/ws/voice`, `/telephony/*` and the two probes; everything else is 404 at the edge. The firewall (`ufw`) allows SSH, 80 and 443 in and nothing else. |
+| Headers | `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options DENY`, `Referrer-Policy`, `Permissions-Policy` at the edge; a `default-src 'none'` CSP and `no-store` from the API; the `Server` header removed. |
+| Sessions | Argon2id passwords, mandatory TOTP, 15-minute access tokens, rotating refresh tokens in `httpOnly; Secure; SameSite=Lax` cookies with reuse detection; the panel's own session cookie is `httpOnly` and `Secure` in production. |
+| Telephony | The media WebSocket requires the shared token *and* a source address in `TELEPHONY_IP_ALLOWLIST` (the provider's media ranges). The worker reads the real client address from Caddy's forwarded headers. |
+| Data | Phone numbers are HMAC-indexed with a pepper and AES-256-GCM encrypted under a data key from KMS (or, on a host with no KMS, from `.env` with `ALLOW_LOCAL_DEK_IN_PRODUCTION=true`, said loudly at boot). Row-level security is forced in Postgres and the application connects as a non-owner role. Recordings go to the bucket with server-side encryption. |
+| Boot-time refusal | A production process refuses to start without the pepper, the signing key, the WebSocket token, the internal token, a data key, `SESSION_COOKIE_SECURE=true`, `STORAGE_BACKEND=s3` and the four-eyes rule on; `make preflight` catches the same before Docker is even involved. |
+| Containers | Non-root users, no shell tools beyond Python, log rotation, the voice worker drains live calls for ten minutes on stop. |
+
+What is deliberately not here: a WAF, DDoS protection and DNS are the cloud
+provider's layer (put the panel hostname behind their proxy if you want them);
+audit-log shipping and alert routing are in `docs/RUNBOOK.md`.
+
 ## 1. What you need before you start
 
 | Item | Where it goes |
@@ -31,11 +66,12 @@ openssl rand -hex 16      # POSTGRES_PASSWORD, REDIS_PASSWORD, S3_SECRET_ACCESS_
 
 ```bash
 git clone <this repository> uaagro && cd uaagro
-cp .env.example .env
+cp infra/deploy/production.env.example .env
 ```
 
-Fill every `FILL_ME` in `.env`. Set `APP_ENV=production`, `SESSION_COOKIE_SECURE=true`,
-`PUBLIC_BASE_URL=https://voice.<domain>`, and the two hostnames. The database and
+Fill every `FILL_ME` in `.env`; the template already carries `APP_ENV=production`,
+`SESSION_COOKIE_SECURE=true`, `STORAGE_BACKEND=s3`, `PUBLIC_BASE_URL=https://…`
+and the compose-internal addresses. Then `make preflight`. The database and
 Redis URLs for the compose stack are:
 
 ```
@@ -51,10 +87,22 @@ ignored by git and must stay that way.
 ## 3. First start
 
 ```bash
+sudo infra/deploy/bootstrap.sh
+```
+
+That is Docker, the firewall, unattended security updates, the preflight, the
+build, the start, the migration, the seed and a wait for both hostnames to
+answer over TLS. By hand, the same thing is:
+
+```bash
 docker compose --env-file .env -f infra/docker/docker-compose.prod.yml build
 docker compose --env-file .env -f infra/docker/docker-compose.prod.yml up -d
 docker compose --env-file .env -f infra/docker/docker-compose.prod.yml run --rm migrate uaagro-db seed
 ```
+
+Certificates need the two DNS names to already point at the host and ports 80
+and 443 open; until they do, Caddy retries and `docker compose … logs caddy`
+says why. `ACME_EMAIL` receives expiry notices.
 
 The seed creates the organisation, the ten centres, the catalogue, one user per
 role and an unpublished script per direction. It is idempotent.
@@ -110,9 +158,9 @@ call page a minute after hang-up. That call is §21's Phase 5 gate;
 
 | Task | How |
 |---|---|
-| Deploy a new version | `git pull && docker compose ... build && docker compose ... up -d` — the voice worker drains live calls for up to ten minutes before stopping |
-| Roll back | `git checkout <previous tag>` and the same two commands; migrations are backward-compatible one step |
-| Back up | Nightly `pg_dump` of the `postgres` volume to object storage: `docker compose ... exec postgres pg_dump -U uaagro uaagro | gzip > uaagro-$(date +%F).sql.gz`, then `mc cp` to the bucket. Recordings are already in the bucket. |
+| Deploy a new version | `infra/deploy/deploy.sh` (pull, preflight, build, roll, migrate, health) — the voice worker drains live calls for up to ten minutes before stopping |
+| Roll back | `infra/deploy/deploy.sh <previous tag>`; migrations are backward-compatible one step |
+| Back up | `infra/deploy/backup.sh` nightly from cron: a compressed `pg_dump` into `backups/` in the recordings bucket, keeping the last 30. Recordings are already in the bucket. |
 | Restore | `docker compose ... exec -T postgres psql -U uaagro uaagro < dump.sql` on an empty database; see `docs/RUNBOOK.md` for the rehearsal |
 | Scale to 100 calls | A second voice-worker replica behind Caddy (`deploy.replicas: 2`), managed Postgres and Redis (`infra/terraform`), and `MAX_CONCURRENT_CALLS=100` |
 | Change the database | Test the new address on the panel's Data page, then set `DATABASE_URL` in `.env` and `up -d` |

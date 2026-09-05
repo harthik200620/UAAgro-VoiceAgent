@@ -100,6 +100,9 @@ def _test_environment() -> Iterator[None]:
     os.environ.update(
         {
             "APP_ENV": "test",
+            # The suite is one address making thousands of requests on
+            # purpose; the per-address ceiling is for deployments.
+            "API_RATE_LIMIT_PER_MINUTE": "0",
             "PHONE_HASH_PEPPER": base64.b64encode(b"test-pepper-32-bytes-exactly!!!!").decode(),
             "LOCAL_DEK_BASE64": base64.b64encode(b"test-dek-32-bytes-exactly-ok!!!!").decode(),
             "JWT_SIGNING_KEY": base64.b64encode(b"test-jwt-signing-key-32-bytes!!!").decode(),

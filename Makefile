@@ -9,7 +9,7 @@ UV      := uv run
 PKGS    := packages apps tests
 
 .DEFAULT_GOAL := help
-.PHONY: help dev down logs test test-unit lint types fmt check eval load deploy \
+.PHONY: help dev down logs test test-unit lint types fmt check eval load deploy preflight bootstrap backup prod-logs terraform-plan \
         db-migrate db-seed db-partitions db-check db-reset sim ci \
         models kb-ingest kb-status kb-retrieval \
         latency observability admin-test admin-build
@@ -150,5 +150,20 @@ admin-build:  ## admin panel production build
 
 # ---------------------------------------------------------------- deploy
 
-deploy:  ## terraform plan for ap-south-1 (Phase 8)
+preflight:  ## check .env for a production start: placeholders, plaintext URLs, missing controls
+	$(UV) python scripts/deploy_preflight.py --env-file .env
+
+deploy:  ## on the host: pull, preflight, build, roll the production stack (infra/deploy/deploy.sh)
+	infra/deploy/deploy.sh
+
+bootstrap:  ## on a fresh Ubuntu host, as root: Docker, firewall, first start (infra/deploy/bootstrap.sh)
+	sudo infra/deploy/bootstrap.sh
+
+backup:  ## dump the database into the object store next to the recordings
+	infra/deploy/backup.sh
+
+prod-logs:  ## follow the production stack's logs
+	docker compose --env-file .env -f infra/docker/docker-compose.prod.yml logs -f --tail 200
+
+terraform-plan:  ## terraform plan for the managed ap-south-1 footprint (never applied; see main.tf)
 	cd infra/terraform && terraform init -input=false && terraform plan

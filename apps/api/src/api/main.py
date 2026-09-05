@@ -27,7 +27,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.cors import CORSMiddleware
 
 from uaagro_db.engine import dispose_engines
-from uaagro_domain.errors import AuthorizationError, UAAgroError
+from uaagro_domain.errors import AuthorizationError, RateLimitedError, UAAgroError
 from uaagro_domain.eventloop import install_fast_event_loop
 from uaagro_domain.logging import configure_logging
 from uaagro_domain.settings import Settings, get_defaults, get_settings
@@ -47,6 +47,7 @@ from .routers import (
     panel_overview,
     panel_sources,
 )
+from .security import ratelimit
 from .security.deps import SettingsDep
 from .security.ratelimit import close_redis
 from .services.jobs import close_jobs
@@ -186,6 +187,84 @@ async def request_context(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
         )
     return response
+
+
+#: The largest request body any route accepts. The knowledge-base upload
+#: allows 25 MB; everything else is far smaller. Above this the body is
+#: never read. Caddy enforces the same ceiling at the edge.
+MAX_REQUEST_BYTES = 32 * 1024 * 1024
+#: Paths the per-address rate ceiling does not apply to: probes are scraped
+#: on a schedule and must never be the thing that gets throttled.
+_UNLIMITED_PREFIXES = ("/health", "/metrics")
+
+
+def _error(status_code: int, code: str, message: str, remedy: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": code, "message": message, "remedy": remedy, "context": {}}},
+    )
+
+
+@app.middleware("http")
+async def limit_request_size(
+    request: Request, call_next: Callable[[Request], Awaitable[JSONResponse]]
+) -> JSONResponse:
+    """Refuse an oversized or unbounded body before a route reads it (§17).
+
+    A declared length above the ceiling is a 413. A body with no declared
+    length on a mutating request is a 411: every client this API has sends
+    one, and a chunked body of unknown size is how memory is exhausted.
+    """
+    if request.method in ("POST", "PUT", "PATCH"):
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            if not declared.isdigit() or int(declared) > MAX_REQUEST_BYTES:
+                return _error(
+                    413,
+                    "payload_too_large",
+                    "The request body is larger than this API accepts.",
+                    f"Keep requests under {MAX_REQUEST_BYTES // (1024 * 1024)} MB.",
+                )
+        elif "chunked" in request.headers.get("transfer-encoding", "").lower():
+            return _error(
+                411,
+                "length_required",
+                "The request body has no declared length.",
+                "Send a Content-Length header.",
+            )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def limit_request_rate(
+    request: Request, call_next: Callable[[Request], Awaitable[JSONResponse]]
+) -> JSONResponse:
+    """A generous per-address ceiling on everything but the probes (§17).
+
+    The sign-in routes carry their own, stricter limits. This one exists so
+    that a single address cannot occupy the API -- a scraper, a runaway
+    script, a panel tab in a reload loop -- and it fails open when Redis is
+    down, as the sign-in limits do, for the reason given there.
+    """
+    per_minute = get_settings().api_rate_limit_per_minute
+    if per_minute > 0 and not request.url.path.startswith(_UNLIMITED_PREFIXES):
+        address = request.client.host if request.client else "unknown"
+        try:
+            await ratelimit.check(
+                "api-ip", address, ratelimit.Limit(requests=per_minute, window_seconds=60)
+            )
+        except RateLimitedError as exc:
+            response = _error(
+                exc.http_status,
+                exc.code,
+                exc.message,
+                getattr(exc, "remedy", None) or "Slow down and try again.",
+            )
+            retry_after = (exc.context or {}).get("retry_after_s")
+            if retry_after:
+                response.headers["retry-after"] = str(retry_after)
+            return response
+    return await call_next(request)
 
 
 @app.exception_handler(UAAgroError)

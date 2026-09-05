@@ -84,6 +84,11 @@ log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/admin/campaigns", tags=["panel"])
 
+#: A contact list is a column of phone numbers; a spreadsheet this big is
+#: something else, and reading it into memory is how a request takes the
+#: process down.
+MAX_IMPORT_BYTES = 10 * 1024 * 1024
+
 #: How many contacts one pasted list may carry. Above this the operator
 #: should split the list; below it the import completes in one request.
 MAX_CONTACTS = 5000
@@ -771,7 +776,12 @@ async def extract(
     """
     if not file.filename:
         raise ValidationError("No file was sent.", remedy="Choose a spreadsheet or a CSV file.")
-    data = await file.read()
+    data = await file.read(MAX_IMPORT_BYTES + 1)
+    if len(data) > MAX_IMPORT_BYTES:
+        raise ValidationError(
+            "That file is too large to read as a contact list.",
+            remedy=f"Upload files under {MAX_IMPORT_BYTES // (1024 * 1024)} MB, or split the list.",
+        )
     found = extract_contacts(data, filename=file.filename)
     log.info(
         "campaign.contacts_extracted",

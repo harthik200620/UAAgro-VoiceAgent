@@ -31,11 +31,14 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final
 
+import structlog
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from uaagro_domain.errors import ConfigurationError, MissingCredentialError
 from uaagro_domain.phone import Msisdn, normalise_msisdn
 from uaagro_domain.settings import Settings, get_settings
+
+log = structlog.get_logger(__name__)
 
 #: Envelope format version. Byte 0 of every ciphertext.
 #: 1 = local development key, 2 = KMS-wrapped data key.
@@ -250,7 +253,7 @@ def build_cipher(settings: Settings) -> PhoneCipher:
         )
     pepper = _decode_key("PHONE_HASH_PEPPER", pepper_b64)
 
-    if settings.is_production:
+    if settings.is_production and not settings.allow_local_dek_in_production:
         key_id = settings.kms_key_id
         if not key_id:
             raise MissingCredentialError(
@@ -258,6 +261,13 @@ def build_cipher(settings: Settings) -> PhoneCipher:
             )
         provider: KeyProvider = KmsKeyProvider(key_id, settings.s3_region)
     else:
+        if settings.is_production:
+            # Chosen, not defaulted into: the operator set the flag, and the
+            # log says so once at boot so a later reader knows where the key is.
+            log.warning(
+                "crypto.local_dek_in_production",
+                remedy="Move the data key to a KMS when one is available.",
+            )
         local_b64 = settings.local_dek_base64
         if not local_b64:
             raise MissingCredentialError(
