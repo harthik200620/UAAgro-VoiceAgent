@@ -242,10 +242,9 @@ async def _sizes(db: Any) -> dict[str, tuple[int, int, bool]]:
     ).all()
     folded = {name: (int(rows), int(size)) for name, rows, size in children}
     out: dict[str, tuple[int, int, bool]] = {}
-    for name, rows, size, kind in plain:
+    for name, own_rows, own_size, kind in plain:
         partitioned = kind == "p"
-        if partitioned and name in folded:
-            rows, size = folded[name]
+        rows, size = folded[name] if partitioned and name in folded else (own_rows, own_size)
         out[str(name)] = (int(rows), int(size), partitioned)
 
     # The statistics collector's live-row estimate is what a big table gets:

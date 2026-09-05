@@ -475,7 +475,7 @@ async def test_named_products_resolve_by_their_spoken_forms(line: str, expected:
 
 
 def test_the_centre_is_named_by_its_place_and_prices_are_whole_rupees() -> None:
-    from voice_worker.flow.direct import _money
+    from voice_worker.flow.phrasebook import money as _money
 
     assert spoken_centre_name("नवीन खुशहाली किसान सेवा केंद्र - लखनऊ") == "लखनऊ सेंटर"
     assert spoken_centre_name("बाराबंकी सेंटर") == "बाराबंकी सेंटर"

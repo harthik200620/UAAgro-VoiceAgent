@@ -43,9 +43,13 @@ dev-local:  ## bring up the stack WITHOUT Docker (embedded Postgres)
 	@echo "    1)  set -a; . ./.localdev/env; set +a; uv run uvicorn api.main:app --port 8000"
 	@echo "    2)  cd apps/admin && npx next dev -p 3000"
 	@echo "    3)  open http://localhost:3000/en/login"
+	@echo "    4)  make demo   -> http://127.0.0.1:8090 (talk to the agent from the browser)"
 	@echo
 	@echo "  sign in as admin@uaagro.in / DevOnly!Passw0rd"
 	@echo "  two-factor is mandatory (§17); 'make totp' prints the code."
+
+demo:  ## the Flask demo backend on :8090 -- stack status and the browser call page
+	set -a; . ./.localdev/env; set +a; uv run uaagro-demo --host 127.0.0.1 --port 8090
 
 totp:  ## print the current two-factor code for the local admin account
 	@uv run python scripts/dev_totp.py

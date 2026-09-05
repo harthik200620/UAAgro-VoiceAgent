@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}UA Agro demo{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='demo.css') }}">
+</head>
+<body{% block body_attrs %}{% endblock %}>
+<header class="top">
+  <a class="brand" href="{{ url_for('demo.home') }}">UA Agro <span>demo</span></a>
+  <nav>
+    <a href="{{ url_for('demo.home') }}">Stack</a>
+    <a href="{{ url_for('demo.call') }}">Talk to the agent</a>
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>

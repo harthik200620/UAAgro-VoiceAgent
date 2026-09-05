@@ -437,6 +437,11 @@ class Settings(BaseSettings):
     #: host only on a laptop -- in a compose stack the API reaches the worker
     #: by service name and the operator's browser cannot.
     voice_worker_public_url: str = "http://127.0.0.1:8080"
+    #: Where a browser reaches the control plane. The demo backend probes it.
+    api_public_url: str = "http://127.0.0.1:8000"
+    #: The Flask demo backend: the browser call page the panel links to,
+    #: and the page that answers a simulated outbound call.
+    demo_public_url: str = "http://127.0.0.1:8090"
     #: Signs and verifies provider webhooks (§17). Absent means webhooks are
     #: refused rather than trusted -- an unauthenticated webhook can mark a call
     #: answered or a consent granted.

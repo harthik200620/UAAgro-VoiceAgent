@@ -144,9 +144,7 @@ class TurnReport:
 
     def table(self) -> str:
         rows = ["language      n   false-cut  dead-air   mean wait   score"]
-        for result in sorted(
-            self.by_language.values(), key=lambda r: r.score, reverse=True
-        ):
+        for result in sorted(self.by_language.values(), key=lambda r: r.score, reverse=True):
             rows.append(
                 f"{result.language:<12} {result.total:>3} "
                 f"{result.false_cut_rate:>9.1%} {result.dead_air_rate:>9.1%} "
@@ -158,9 +156,7 @@ class TurnReport:
 def evaluate(fixtures: Sequence[TurnFixture]) -> TurnReport:
     report = TurnReport()
     for fixture in fixtures:
-        result = report.by_language.setdefault(
-            fixture.language, LanguageResult(fixture.language)
-        )
+        result = report.by_language.setdefault(fixture.language, LanguageResult(fixture.language))
         result.total += 1
         verdict = judge(fixture)
         if verdict is Verdict.FALSE_CUT:
@@ -201,14 +197,10 @@ def regression_gate(
             continue
         if after.false_cut_rate > before.false_cut_rate + tolerance:
             reasons.append(
-                f"{language}: false cuts {before.false_cut_rate:.1%} -> "
-                f"{after.false_cut_rate:.1%}"
+                f"{language}: false cuts {before.false_cut_rate:.1%} -> {after.false_cut_rate:.1%}"
             )
 
-    if (
-        candidate.overall_dead_air_rate
-        > baseline.overall_dead_air_rate + max(tolerance, 0.05)
-    ):
+    if candidate.overall_dead_air_rate > baseline.overall_dead_air_rate + max(tolerance, 0.05):
         # Dead air gets a looser bound than false cuts: it is a worse
         # experience, not a wrong answer.
         reasons.append(

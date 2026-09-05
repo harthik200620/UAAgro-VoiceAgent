@@ -214,7 +214,7 @@ async def test_a_ringing_contact_offers_the_browser_answer_link(
     contact = next(c for c in detail["contacts"] if c["id"] == str(contact_id))
     assert contact["status"] == "ringing"
     assert contact["answerUrl"] is not None
-    assert contact["answerUrl"].endswith(f"/dev/call?answer={contact_id}")
+    assert contact["answerUrl"].endswith(f"/call?answer={contact_id}")
     assert detail["counts"]["inCall"] == 1
     assert detail["counts"]["waiting"] == 1
 

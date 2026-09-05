@@ -222,7 +222,7 @@ class SarvamSTT(STTService):
                 try:
                     self._queue.put_nowait(event)
                 except asyncio.QueueFull:
-                    log.error("stt.event_queue_full", provider=self.provider)
+                    log.warning("stt.event_queue_full", provider=self.provider)
                     await self._queue.put(event)
         except asyncio.CancelledError:
             raise

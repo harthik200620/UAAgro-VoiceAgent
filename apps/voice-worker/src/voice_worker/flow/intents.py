@@ -182,11 +182,29 @@ _PRICE = _rule(
     "भाव",
     "मूल्य",
     "price",
+    "prices",
     "rate",
     "cost",
     "कितने का",
     "कितने की",
     "कितने रुपये",
+    # The recogniser writes the English a farmer says in Devanagari --
+    # "उसका प्राइसेस बता दीजिए" went to UNKNOWN and the model answered a price
+    # question with no price in front of it.
+    "प्राइस",
+    "प्राइसेस",
+    "कॉस्ट",
+    # Romanised Hindi, which is what an English-configured phone keyboard
+    # and some recognisers produce.
+    "kitne ka",
+    "kitne ki",
+    "kitna hai",
+    "kitne mein",
+    "rate kya",
+    "bhav",
+    "daam",
+    "keemat",
+    "kimat",
 )
 _AVAILABILITY = _rule(
     "मिलेगा",
@@ -206,6 +224,39 @@ _AVAILABILITY = _rule(
     "दे दीजिए",
     "दे दो",
     "लेना है",
+    "लेनी है",
+    "लेने हैं",
+    "ले लूँगा",
+    "ले लूंगा",
+    "ले लेता",
+    "ले लेंगे",
+    "ख़रीदना",
+    "खरीदना",
+    "मंगवाना",
+    "मंगाना",
+    "मिलता है",
+    "मिलती है",
+    "रखते हो",
+    "रखते हैं",
+    "मिल जाएगी",
+    # English and romanised Hindi. "I want rice seeds" is the same request
+    # as "धान का बीज चाहिए" and must land on the same path.
+    "want",
+    "need",
+    "looking for",
+    "do you have",
+    "have you got",
+    "is there",
+    "buy",
+    "purchase",
+    "chahiye",
+    "chahie",
+    "chahiye",
+    "milega",
+    "milegi",
+    "hai kya",
+    "mil jayega",
+    "lena hai",
 )
 
 _DOSAGE = _rule(

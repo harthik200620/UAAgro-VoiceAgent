@@ -378,7 +378,7 @@ def _answer_url(contact: CampaignContact, state: str, settings: Settings) -> str
     """
     if settings.telephony_provider is not TelephonyProvider.SIMULATOR or state != "ringing":
         return None
-    return f"{settings.voice_worker_public_url.rstrip('/')}/dev/call?answer={contact.id}"
+    return f"{settings.demo_public_url.rstrip('/')}/call?answer={contact.id}"
 
 
 async def _contacts(db: AsyncSession, campaign_id: uuid.UUID) -> list[Contact]:
@@ -513,6 +513,31 @@ async def import_campaign(
 
     cipher = get_cipher()
     consent_days = defaults.compliance.consent_validity_days
+
+    # Two queries for the whole list, not two per row: a thousand-number
+    # upload used to be two thousand round trips, each inside the request.
+    hashes = {cipher.hash(msisdn): msisdn for _, msisdn in parsed}
+    known = {
+        farmer.phone_hash: farmer
+        for farmer in (
+            await db.scalars(select(Farmer).where(Farmer.phone_hash.in_(list(hashes))))
+        ).all()
+    }
+    consented: set[uuid.UUID] = set(
+        (
+            await db.scalars(
+                select(ConsentRecord.farmer_id).where(
+                    ConsentRecord.farmer_id.in_([f.id for f in known.values()]),
+                    ConsentRecord.consent_type == ConsentType.PROMOTIONAL_VOICE,
+                    ConsentRecord.revoked_at.is_(None),
+                    (ConsentRecord.expires_at.is_(None)) | (ConsentRecord.expires_at > now),
+                )
+            )
+        ).all()
+        if known
+        else []
+    )
+
     seen: set[bytes] = set()
     imported = 0
     for farmer_name, msisdn in parsed:
@@ -520,7 +545,7 @@ async def import_campaign(
         if phone_hash in seen:
             continue
         seen.add(phone_hash)
-        farmer = await db.scalar(select(Farmer).where(Farmer.phone_hash == phone_hash))
+        farmer = known.get(phone_hash)
         if farmer is None:
             farmer = Farmer(
                 organization_id=principal.organization_id,
@@ -537,17 +562,7 @@ async def import_campaign(
         elif farmer_name and not farmer.full_name:
             farmer.full_name = farmer_name
 
-        has_consent = await db.scalar(
-            select(ConsentRecord.id)
-            .where(
-                ConsentRecord.farmer_id == farmer.id,
-                ConsentRecord.consent_type == ConsentType.PROMOTIONAL_VOICE,
-                ConsentRecord.revoked_at.is_(None),
-                (ConsentRecord.expires_at.is_(None)) | (ConsentRecord.expires_at > now),
-            )
-            .limit(1)
-        )
-        if has_consent is None:
+        if farmer.id not in consented:
             db.add(
                 ConsentRecord(
                     farmer_id=farmer.id,

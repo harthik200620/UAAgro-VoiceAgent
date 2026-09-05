@@ -64,9 +64,7 @@ def upgrade() -> None:
     # afterwards, but granting explicitly costs nothing and does not depend on
     # both revisions having run as the same role.
     for table in TABLES:
-        connection.execute(
-            text(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO {APP_ROLE}")
-        )
+        connection.execute(text(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO {APP_ROLE}"))
 
     for statement in enable_rls_statements(RLS_TABLES):
         connection.execute(text(statement))

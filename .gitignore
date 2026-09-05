@@ -49,3 +49,6 @@ Thumbs.db
 *.log
 .idea/
 .vscode/
+
+# Editor and assistant configuration stays local
+.claude/

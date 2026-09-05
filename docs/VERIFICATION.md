@@ -176,3 +176,43 @@ background jobs `uv run arq worker.tasks.WorkerSettings`) with
    call.
 6. **Changing the words.** On Flows → the inbound helpline, edit the prompt or
    the greeting, save as a new version, publish. The next call speaks it.
+
+## 8. Understanding, on the browser page (added 4 September 2026)
+
+Open the demo backend's call page, `http://127.0.0.1:8090/call` (`make demo`; the worker's old `/dev/call` address redirects there), and say these, in this order. Each
+line names what the agent must do; anything else is a regression.
+
+| Say | The agent must |
+|---|---|
+| "मुझे धान का बीज चाहिए" or "I want rice seeds" | name the two paddy seeds and ask which |
+| "पहला वाला" / "the first one" | give that seed's stock and price |
+| "मसूरी का चाहिए" | give मसूर के 75's stock and price (one matra off the listed name) |
+| "पशु की आहार चाहिए" | list the cattle feeds -- not ask what you want |
+| "गाय का फीड चाहिए" or "cow feed", then "गाय के लिए क्या-क्या दे सकते हैं?" twice | list the four cattle feeds each time -- never "पहला या दूसरा बोलिए", never a hand-over; "दूसरा" after that still picks the second |
+| "बीज चाहिए", then "और क्या-क्या है?" | four seeds with "और भी हैं", then the next ones -- not the same four; "और क्या है" once everything is read: "बस यही हैं" |
+| "खाद में क्या-क्या है?" after a seed list | the fertilisers, not the seeds again |
+| "कौ का फीड चाहिए" | "गाय के लिए हमारे पास ..." -- the word गाय in the reply, not "पशु आहार" |
+| then "वो गाय का ही है न?" / "is it for cows?" / "cow and buffalo?" | "हाँ, ये सब गाय के लिए ही हैं ..." -- a yes about the animal, never the list again; asked a second way, a shorter yes |
+| "दूसरा", then "ये भैंस को भी दे सकते हैं?" | "हाँ, पशु आहार दाना भैंस के लिए ही है। रेट और स्टॉक बताऊँ?", and "हाँ" reads the price |
+| "बकरी का दाना है क्या?" / "hen ka feed" | "गाय-भैंस के लिए है, बकरी के लिए नहीं" and an offer of the manager -- not a price |
+| "यूरिया गाय को खिला सकते हैं?" | "यूरिया खाद है, पशुओं को खिलाने की चीज़ नहीं। गाय के लिए पशु आहार बताऊँ?" -- and "हाँ" lists the feed |
+| "that cattle feed can be used for cow?" (English) | a yes about cows -- never Calcium Ammonium Nitrate |
+| the same question twice | the second answer starts "जी, दोबारा बता देता हूँ" -- never the identical sentence as if new |
+| "गेहूँ के लिए क्या-क्या है?" | the wheat seeds and the wheat sprays, named by kind, then "बीज या दवा — क्या देखूँ?" |
+| "गेहूँ के लिए खाद है क्या?" | the fertilisers -- never "गेहूँ का खाद नहीं है" (the catalogue does not tag fertiliser by crop) |
+| "कार्बेन्डाज़िम गेहूँ में डाल सकते हैं?", then "और धान में?" | "हाँ, ... गेहूँ के लिए है (गेहूँ और चना)", then "धान के लिए नहीं" with the paddy sprays offered |
+| "यूरिया गेहूँ में डाल सकते हैं?" | the model answers from the knowledge base -- not a stock figure |
+| "बाजरा के लिए क्या है?" | "बाजरा के लिए अभी कुछ नहीं है ..." -- the crop is recognised even with nothing in the catalogue |
+| "बीज चाहिए", then "धान" | list four seeds, then the two paddy seeds -- no hand-over |
+| "सबका रेट बता दो" after a list | read every price, then still accept "दूसरा" |
+| "उसका प्राइस" after a list | read every price |
+| anything unintelligible, three times | ask once, ask differently and offer a person, then hand over -- never the same line three times |
+| "आप मशीन हो?" | admit it and offer a person -- not a tools listing |
+| a whole turn in English | answer in English; the English voice if `BAKBAK_VOICE_EN` is set, else the Hindi one |
+| a whole turn in Marathi with `BAKBAK_VOICES=mr=<voice>` set | the same facts in Marathi, or Hindi if the rendering failed validation (`agent.render_rejected` in the log) |
+
+The log lines to watch in `.localdev/worker.log`: `agent.direct` now carries
+`resolved` and `misses`; `agent.handover_after_misses` marks the third miss;
+`pipeline.language_followed` and `pipeline.language_unvoiced` show what the
+recogniser heard and whether a voice existed for it.
+

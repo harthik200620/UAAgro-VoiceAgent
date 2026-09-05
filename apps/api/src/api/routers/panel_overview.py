@@ -924,7 +924,7 @@ def telephony_status(settings: Settings) -> TelephonyStatus:
         inboundNumber=_masked(settings.inbound_did),
         remedy=remedy,
         browserCallUrl=(
-            f"{settings.voice_worker_public_url.rstrip('/')}/dev/call"
+            f"{settings.demo_public_url.rstrip('/')}/call"
             if settings.app_env == "development"
             else None
         ),

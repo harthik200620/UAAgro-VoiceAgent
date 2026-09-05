@@ -642,7 +642,7 @@ class CallSession:
         try:
             built = await self._pipeline_factory(self)
         except Exception as exc:
-            log.error("call.pipeline_unavailable", error=type(exc).__name__)
+            log.exception("call.pipeline_unavailable", error=type(exc).__name__)
             self.outcome = CallOutcome.SYSTEM_FAILURE
             self._enqueue("pipeline_unavailable", {"error": type(exc).__name__})
             return
@@ -711,7 +711,7 @@ class CallSession:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            log.error("call.pipeline_failed", error=type(exc).__name__)
+            log.exception("call.pipeline_failed", error=type(exc).__name__)
             self.outcome = self.outcome or CallOutcome.SYSTEM_FAILURE
             self._enqueue("pipeline_failed", {"error": type(exc).__name__})
 
@@ -1046,8 +1046,41 @@ class CallSession:
         if isinstance(decided, CallOutcome):
             self.outcome = decided
         await asyncio.sleep(HANGUP_GRACE_S)
+        await self._end_the_line()
         log.info("call.hangup_by_agent", outcome=self.outcome.value if self.outcome else None)
         self._hangup.set()
+
+    async def _end_the_line(self) -> None:
+        """Ask the provider to hang up, not just close the media socket.
+
+        Closing the socket ends *our* half. What the caller holds is a phone
+        call, and on every provider here that call outlives the stream: the
+        farmer who has said "धन्यवाद" and heard "नमस्ते" is then left holding
+        a silent line until they hang up themselves, which is what the
+        transcripts showed. The provider's own hang-up is one REST call.
+
+        Best effort by design. A failure here is logged and the socket closes
+        anyway -- a call that ends a moment late is better than a worker that
+        raises inside its own shutdown -- and the browser test page, which has
+        no line behind it, is skipped rather than dialled at.
+        """
+        if self._transferred or self._provider is TelephonyProvider.SIMULATOR:
+            return
+        if self._transfer_adapter is None or not self._call_sid:
+            log.info("call.hangup_not_sent", reason="no call control")
+            return
+        adapter = None
+        try:
+            adapter = self._transfer_adapter(frozenset())
+            await adapter.hangup(call_sid=self._call_sid)
+        except Exception as exc:
+            log.warning("call.hangup_failed", error=type(exc).__name__)
+            return
+        finally:
+            if adapter is not None:
+                with contextlib.suppress(Exception):
+                    await adapter.aclose()
+        log.info("call.line_ended", provider=self._provider.value)
 
     def _tools_of_last_turn(self) -> list[dict[str, Any]]:
         agent = getattr(self._built, "agent", None)

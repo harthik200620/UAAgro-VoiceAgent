@@ -67,6 +67,14 @@ async def load_lexicon(session: AsyncSession) -> Lexicon:
         # name, and what appears on the label they are holding.
         variants.update(i for i in product.active_ingredients if i)
 
+        # The catalogue's own spoken forms -- KB §3.1's "highest-leverage
+        # column", the one the operations team fills in ("धान का बीज",
+        # "सफ़ेद खाद", "uria"). It was seeded, indexed, documented, and never
+        # read: the first version of this loop built the vocabulary from
+        # brands and ingredients alone, so "urea" reached the matcher only
+        # because it happened to be the English name.
+        variants.update(v for v in (product.lexicon_variants or ()) if v)
+
         # Crops are *not* spoken forms of a product. "potato" answers to a
         # seed, a fungicide and a foliar spray at once, and as a variant it
         # resolved to whichever came first by SKU. They travel on the entry

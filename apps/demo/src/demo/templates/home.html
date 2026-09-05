@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}UA Agro demo — stack{% endblock %}
+{% block content %}
+<h1>Is everything up?</h1>
+<p class="sub">Probed from this page, in the browser's own view of the network.</p>
+
+<div class="cards" id="status">
+  {% for key, label, note in [
+       ("worker", "Voice worker", "answers the media socket"),
+       ("worker_ready", "Voice worker, ready", "tools compiled, voice warmed"),
+       ("api", "Control plane API", "what the admin panel talks to")] %}
+  <div class="card probe" data-key="{{ key }}">
+    <div class="probe-head">
+      <span class="dot"></span>
+      <b>{{ label }}</b>
+      <span class="state">checking…</span>
+    </div>
+    <div class="probe-note">{{ note }}</div>
+    <div class="probe-note" data-calls hidden></div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <b>Addresses</b>
+  <dl class="addr">
+    <dt>Voice worker</dt><dd><code>{{ cfg.worker_public_url }}</code></dd>
+    <dt>API</dt><dd><code>{{ cfg.api_public_url }}</code></dd>
+    <dt>Environment</dt><dd><code>{{ cfg.app_env }}</code>{% if not cfg.enabled %} — the call page is development-only{% endif %}</dd>
+  </dl>
+</div>
+
+{% if cfg.enabled %}
+<p><a class="button" href="{{ url_for('demo.call') }}">Talk to the agent →</a></p>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+// The page never waits on a probe: it paints, then asks, then keeps asking.
+async function refresh() {
+  try {
+    const status = await (await fetch("{{ url_for('demo.status') }}")).json();
+    for (const [key, probe] of Object.entries(status)) {
+      const card = document.querySelector(`.probe[data-key="${key}"]`);
+      if (!card) continue;
+      card.classList.toggle("ok", probe.ok);
+      card.classList.toggle("down", !probe.ok);
+      card.querySelector(".state").textContent = probe.ok ? "up" : (probe.detail || "down");
+      const calls = card.querySelector("[data-calls]");
+      const live = probe.body && probe.body.live_calls;
+      calls.hidden = live === undefined || live === null;
+      if (!calls.hidden) calls.textContent = live + " call(s) in progress";
+    }
+  } catch (e) { /* the page itself is down; nothing to update */ }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+{% endblock %}

@@ -10,17 +10,31 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Sequence
+from typing import Any
+
+import pytest
 
 from tests.test_interruption import Harness, Responder, end
+from tests.test_transfer import (
+    _Feed,
+    _Pipeline,
+    _Repository,
+    _session,
+    _settle,
+    _start_frame,
+    _Transport,
+)
 from tests.test_voice_gate import quiet, voice
-from uaagro_domain.enums import CallOutcome
+from uaagro_domain.enums import CallOutcome, CallStatus, TelephonyProvider
 from voice_worker.flow.address import AddressBudget
-from voice_worker.flow.agent import Agent
+from voice_worker.flow.agent import Agent, ClosedCall
 from voice_worker.flow.closing import (
     CLOSING_LINE_HI,
     SILENCE_PROMPT_HI,
     SILENCE_WARN_HI,
+    agent_said_goodbye,
     asked_for_more,
+    asks_to_hang_up,
     declines_more,
     farmer_is_done,
     is_farewell,
@@ -28,6 +42,7 @@ from voice_worker.flow.closing import (
 from voice_worker.flow.context import CallerContext, ContextBuilder
 from voice_worker.flow.validator import OutputValidator
 from voice_worker.pipelines.conversation import SilenceLadder
+from voice_worker.runtime import session as session_module
 from voice_worker.runtime.vad import VoiceGate
 from voice_worker.text.speech import text_for_speech
 from voice_worker.tools.base import ToolRegistry
@@ -273,3 +288,147 @@ async def test_an_announcement_during_the_ladder_does_not_collide_with_it() -> N
     assert said.count(SILENCE_PROMPT_HI) >= 1
     assert CLOSING_LINE_HI not in said
     assert h.pipeline.call_outcome is None
+
+
+# --------------------------------------------------------------------------- #
+# The three that a real call showed were missing
+# --------------------------------------------------------------------------- #
+
+
+def test_being_told_to_hang_up_ends_the_call_however_it_is_phrased() -> None:
+    """From the transcript of 3 September: a farmer said "ओके, थैंक यू। यू कैन
+    हैंग द कॉल।" and was answered with "आप कौन हैं और क्या चाहिए?" -- eight
+    words, four of them substance, so the farewell rule threw it out. An
+    instruction to end the call is not a farewell and is not tested like one."""
+    for line in (
+        "ओके, थैंक यू। यू कैन हैंग द कॉल।",
+        "कॉल काट दीजिए",
+        "फ़ोन रख दीजिए अब",
+        "अच्छा, लाइन काट दो",
+        "please hang up",
+        "you can cut the call now",
+        "कॉल खतम कर दीजिए",
+        # Phrased as a question, which the farewell rule vetoes and this
+        # deliberately does not: it is still an instruction.
+        "क्या आप कॉल काट सकते हैं?",
+    ):
+        assert asks_to_hang_up(line), line
+        assert farmer_is_done(line, last_agent_line="आलू के बीज का रेट तेरह सौ पचास रुपये है।"), line
+
+    for line in ("फ़सल काट ली है, अब क्या डालें?", "कॉल पर बात हो सकती है क्या?"):
+        assert not asks_to_hang_up(line), line
+
+
+def test_ok_then_done_is_a_goodbye() -> None:
+    """Same call: "ओके, देन डन।" was read as a fresh question."""
+    for line in ("ओके, देन डन।", "डन", "ठीक है डन", "ok done", "हो गया, धन्यवाद"):
+        assert farmer_is_done(line, last_agent_line="जी, बताइए।"), line
+
+
+def test_the_agents_own_farewell_is_read_as_one() -> None:
+    assert agent_said_goodbye("अभी कॉल खत्म करते हैं। आपकी मदद के लिए धन्यवाद। नमस्ते।")
+    assert agent_said_goodbye(CLOSING_LINE_HI)
+    # An answer that offers more is the opposite of a goodbye, whatever
+    # politeness it carries.
+    assert not agent_said_goodbye("बोरी तेरह सौ पचास की है। और कुछ पूछना है?")
+    assert not agent_said_goodbye("नमस्ते, बताइए क्या मदद करूँ?")
+    assert not agent_said_goodbye("जी, मैं आपको सेंटर मैनेजर से जोड़ देता हूँ।")
+
+
+async def test_an_agent_that_says_goodbye_ends_the_call_itself() -> None:
+    """The model notices the conversation is over before the rules do. Until
+    this, it said "अभी कॉल खत्म करते हैं ... नमस्ते" and then kept answering,
+    and the caller was the one who had to hang up."""
+    gateway = ScriptedGateway(["अभी कॉल खत्म करते हैं। ", "आपकी मदद के लिए धन्यवाद। नमस्ते।"])
+    agent = make_agent(gateway)
+
+    pieces = await collect(agent, "ठीक है, समझ गया")
+
+    assert agent.call_over
+    assert agent.result is not None and agent.result.call_outcome is CallOutcome.RESOLVED
+    assert pieces, "the farewell was never spoken"
+
+
+async def test_an_ordinary_answer_does_not_end_the_call() -> None:
+    gateway = ScriptedGateway(["बोरी तेरह सौ पचास की है। ", "और कुछ पूछना है?"])
+    agent = make_agent(gateway)
+
+    await collect(agent, "डीएपी का रेट")
+
+    assert not agent.call_over
+
+
+# --------------------------------------------------------------------------- #
+# The line, not just the socket
+# --------------------------------------------------------------------------- #
+
+
+async def _call_that_ends_itself(
+    monkeypatch: pytest.MonkeyPatch, *, provider: TelephonyProvider | None = None
+) -> tuple[Any, list[Any]]:
+    """Run a call to the point where the responder says it is over."""
+    monkeypatch.setattr(session_module, "HANGUP_GRACE_S", 0.0)
+    transport, repo, feed, pipeline = _Transport(), _Repository(), _Feed(), _Pipeline()
+    adapters: list[Any] = []
+    call = _session(transport, repo, feed, pipeline, adapters, fail=False, provider=provider)
+    running = asyncio.create_task(call.run())
+    transport.frame({"event": "connected"})
+    transport.frame(_start_frame())
+    await _settle()
+    assert pipeline.on_call_over is not None, "the session did not wire the hook"
+
+    pipeline.responder.result = ClosedCall(call_outcome=CallOutcome.RESOLVED)
+    await pipeline.on_call_over()
+    await running
+    return call, adapters
+
+
+async def test_the_provider_is_told_to_hang_up_not_just_the_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing the media socket ends our half of the call. The farmer is
+    holding a phone call, and on every provider here that call outlives the
+    stream -- so a caller who had said goodbye and heard "नमस्ते" was left on
+    a silent line until they hung up themselves."""
+    call, adapters = await _call_that_ends_itself(monkeypatch)
+
+    assert len(adapters) == 1, "call control was never built"
+    assert adapters[0].hangups == ["call-77"]
+    assert adapters[0].closed, "the control client was left open"
+    assert call.outcome is CallOutcome.RESOLVED
+    assert call.status is CallStatus.COMPLETED
+
+
+async def test_the_browser_test_page_has_no_line_to_hang_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its call id belongs to no provider; dialling at one would be an error
+    on a real account and a lie in the log."""
+    call, adapters = await _call_that_ends_itself(
+        monkeypatch, provider=TelephonyProvider.SIMULATOR
+    )
+
+    assert adapters == []
+    assert call.status is CallStatus.COMPLETED
+
+
+async def test_a_provider_that_refuses_the_hang_up_still_ends_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One REST call failing must not leave the socket open or the worker
+    raising inside its own shutdown."""
+    monkeypatch.setattr(session_module, "HANGUP_GRACE_S", 0.0)
+    transport, repo, feed, pipeline = _Transport(), _Repository(), _Feed(), _Pipeline()
+    adapters: list[Any] = []
+    call = _session(transport, repo, feed, pipeline, adapters, fail=True)
+    running = asyncio.create_task(call.run())
+    transport.frame(_start_frame())
+    await _settle()
+
+    pipeline.responder.result = ClosedCall(call_outcome=CallOutcome.RESOLVED)
+    await pipeline.on_call_over()
+    await running
+
+    assert adapters[0].hangups == []
+    assert call.status is CallStatus.COMPLETED
+    assert repo.finalised, "the call row was never closed"

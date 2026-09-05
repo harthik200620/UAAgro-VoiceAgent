@@ -28,6 +28,7 @@ from __future__ import annotations
 import re
 
 from ..text.script import whole_word, words
+from ..text.speech import split_sentences
 
 #: The default closing, used when a config has none. The published
 #: ``closing_template`` normally replaces it.
@@ -72,6 +73,8 @@ _FAREWELL_WORDS: frozenset[str] = frozenset(
         "चलती",
         "चलिए",
         "अच्छा",
+        "डन",
+        "done",
     }
 )
 #: Phrases that say "that is all". Matched as whole words in sequence.
@@ -177,6 +180,13 @@ _FILLER: frozenset[str] = frozenset(
         "करती",
         "लेता",
         "लेती",
+        "देन",
+        "then",
+        "दीजिए",
+        "दीजिये",
+        "दो",
+        "सब",
+        "अभी",
     }
 )
 #: The agent asked whether there was anything more.
@@ -190,6 +200,52 @@ _QUESTION_MARKERS = re.compile(
         "रेट|दाम|भाव|स्टॉक|बताइए|बताओ|बताना|चाहिए|मिलेगा|मिलेगी|कीमत|price|rate|how|what|"
         "when|where|which|why"
     ),
+    re.IGNORECASE,
+)
+
+#: The farmer asking, in so many words, for the line to be ended. These end
+#: the call whatever else is said around them: "you can hang the call" carries
+#: four words that :func:`is_farewell` would read as substance, and "कॉल काट
+#: दीजिए" is phrased as a request, which is exactly what a question mark
+#: veto would throw away. An explicit instruction needs neither test.
+_HANGUP_REQUESTS = (
+    "कॉल काट",
+    "कॉल कट",
+    "काल काट",
+    "फ़ोन काट",
+    "फोन काट",
+    "लाइन काट",
+    "कॉल ख़त्म",
+    "कॉल खत्म",
+    "कॉल ख़तम",
+    "कॉल खतम",
+    "कॉल समाप्त",
+    "फ़ोन रख",
+    "फोन रख",
+    "कॉल बंद",
+    "फ़ोन बंद",
+    "फोन बंद",
+    "रख दीजिए",
+    "रख दीजिये",
+    "रख दो",
+    "हैंग द कॉल",
+    "हैंग अप",
+    "हैंग कर",
+    "डिस्कनेक्ट",
+    "hang up",
+    "hang the call",
+    "hang it up",
+    "cut the call",
+    "end the call",
+    "disconnect",
+)
+
+#: The agent's own last sentence taking leave. A model that has decided the
+#: call is over says so -- "अभी कॉल खत्म करते हैं ... धन्यवाद" -- and used to
+#: be answered by the caller hanging up, because nothing was watching for it.
+_AGENT_TAKES_LEAVE = re.compile(
+    r"(कॉल\s*(ख़त्म|खत्म|ख़तम|खतम|समाप्त|बंद)|फ़ोन\s*रख|फोन\s*रख|नमस्ते|नमस्कार|अलविदा|"
+    r"फिर\s*मिलते|good\s*bye|goodbye)",
     re.IGNORECASE,
 )
 
@@ -227,7 +283,7 @@ def is_farewell(transcript: str) -> bool:
     substantive = [t for t in tokens if t not in _FILLER and t not in _FAREWELL_WORDS]
     if substantive:
         return False
-    if tokens == ["अच्छा"] or tokens == ["ठीक", "है"]:
+    if tokens in (["अच्छा"], ["ठीक", "है"]):
         return False
     return True
 
@@ -246,6 +302,41 @@ def declines_more(transcript: str) -> bool:
     return all(t in _FILLER or t in _NEGATIVES or t in _FAREWELL_WORDS for t in tokens)
 
 
+def asks_to_hang_up(transcript: str) -> bool:
+    """The farmer told the agent to end the call.
+
+    Unlike a farewell this is an instruction, so nothing else in the sentence
+    can talk it out of being one: neither the length cap nor the question-mark
+    veto applies. "क्या आप कॉल काट सकते हैं?" is a request, not an enquiry.
+    """
+    tokens = _tokens(transcript)
+    if not tokens:
+        return False
+    return any(_has_phrase(tokens, phrase) for phrase in _HANGUP_REQUESTS)
+
+
+def agent_said_goodbye(text: str) -> bool:
+    """The agent's own reply took leave of the caller.
+
+    Checked on the last sentence only, and never when that sentence asks
+    something: the closing line's own "और कुछ पूछना हो तो कभी भी फ़ोन कीजिए"
+    sits in front of "नमस्ते", and a mid-call "नमस्ते जी, बताइए" is a
+    greeting. A reply that ends by saying goodbye ends the call -- the model
+    is often the first to notice that the conversation is finished, and until
+    this existed the caller had to hang up on an agent that had just said
+    farewell.
+    """
+    if not text:
+        return False
+    sentences = [s for s in split_sentences(text) if s.strip()]
+    if not sentences:
+        return False
+    tail = sentences[-1]
+    if _QUESTION_MARKERS.search(tail):
+        return False
+    return _AGENT_TAKES_LEAVE.search(tail) is not None
+
+
 def asked_for_more(agent_text: str | None) -> bool:
     """Whether the agent's last line asked if there was anything else."""
     if not agent_text:
@@ -255,6 +346,8 @@ def asked_for_more(agent_text: str | None) -> bool:
 
 def farmer_is_done(transcript: str, *, last_agent_line: str | None) -> bool:
     """The rule the agent applies before asking the model anything."""
+    if asks_to_hang_up(transcript):
+        return True
     return is_farewell(transcript) or (
         declines_more(transcript) and asked_for_more(last_agent_line)
     )
@@ -265,7 +358,9 @@ __all__ = (
     "MAX_FAREWELL_WORDS",
     "SILENCE_PROMPT_HI",
     "SILENCE_WARN_HI",
+    "agent_said_goodbye",
     "asked_for_more",
+    "asks_to_hang_up",
     "declines_more",
     "farmer_is_done",
     "is_farewell",

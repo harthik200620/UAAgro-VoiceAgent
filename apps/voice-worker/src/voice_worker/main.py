@@ -16,7 +16,6 @@ import asyncio
 import contextlib
 import hmac
 import ipaddress
-import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -30,7 +29,7 @@ from sqlalchemy import select
 
 from uaagro_db.engine import dispose_engines, incall_session
 from uaagro_db.models import Organization
-from uaagro_domain.enums import CallDirection, FlowType, TelephonyProvider
+from uaagro_domain.enums import CallDirection, TelephonyProvider
 from uaagro_domain.eventloop import install_fast_event_loop
 from uaagro_domain.livefeed import LiveFeed, NullLiveFeed, RedisLiveFeed
 from uaagro_domain.logging import configure_logging
@@ -46,14 +45,12 @@ from .adapters.telephony.exotel import ExotelSerializer
 from .adapters.telephony.mulaw_providers import PlivoSerializer, TwilioSerializer
 from .knowledge.embeddings import E5Embedder
 from .knowledge.retrieval import HybridRetriever
+from .routes.panel import panel_routes
 from .runtime import audio as audio_utils
 from .runtime.assembly import (
-    Caller,
     CallPipeline,
-    build_agent,
     build_call_pipeline,
     find_outbound_contact,
-    load_agent_settings,
 )
 from .runtime.audio_cache import AudioCache
 from .runtime.audio_prewarm import prewarm
@@ -63,7 +60,6 @@ from .runtime.session import CallSession, TransportClosed
 from .runtime.vad import build_voice_gate
 from .text.catalogue_lexicon import load_lexicon
 from .text.lexicon import Lexicon
-from .text.speech import text_for_speech
 from .tools import build_registry
 from .tools.base import ToolRegistry
 
@@ -115,15 +111,29 @@ class WorkerState:
         self.retriever: HybridRetriever | None = None
         self.embed_task: asyncio.Task[None] | None = None
 
+        #: The organisation this worker serves, resolved once per process:
+        #: single-tenant by deployment (§3), and on the path of every INIT.
+        self.organization_id: uuid.UUID | None = None
+
     @property
     def concurrency(self) -> int:
         return len(self.live_calls)
 
+    async def organization(self) -> uuid.UUID | None:
+        if self.organization_id is not None:
+            return self.organization_id
+        try:
+            async with incall_session() as session:
+                self.organization_id = await session.scalar(
+                    select(Organization.id).order_by(Organization.created_at).limit(1)
+                )
+        except Exception as exc:
+            log.warning("worker.organization_lookup_failed", error=type(exc).__name__)
+            return None
+        return self.organization_id
+
 
 state = WorkerState()
-
-#: Resolved once per process. See `_resolve_organization`.
-_organization_id: uuid.UUID | None = None
 
 
 def _build_serializer(provider: TelephonyProvider) -> TelephonySerializer:
@@ -337,6 +347,9 @@ app = FastAPI(
 )
 
 
+app.include_router(panel_routes(state))
+
+
 @app.get("/metrics")
 async def metrics() -> Response:
     """§19's Prometheus scrape target.
@@ -383,7 +396,7 @@ async def telephony_twiml(request: Request) -> Response:
 
 
 # --------------------------------------------------------------------------- #
-# TEMPORARY: the browser test page (delete with `devtools/` when telephony works)
+# The browser test page moved to the Flask demo backend; this keeps its old address.
 # --------------------------------------------------------------------------- #
 
 from .devtools.browser_call import register_browser_call  # noqa: E402
@@ -475,279 +488,6 @@ def _token_valid(websocket: WebSocket) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def _internal_caller_allowed(request: Request) -> bool:
-    """The shared secret between the API and this worker.
-
-    Closed when no token is configured: these endpoints run retrieval and
-    synthesis on the caller's behalf, and a worker on a reachable port with
-    them open would be a free vendor account for whoever found it.
-    """
-    expected = get_settings().internal_api_token
-    if not expected:
-        return False
-    presented = request.headers.get("x-internal-token")
-    return presented is not None and hmac.compare_digest(presented, expected)
-
-
-@app.post("/internal/knowledge/search")
-async def internal_knowledge_search(request: Request) -> JSONResponse:
-    """The panel's "try a question": what retrieval finds, and optionally what
-    the agent would say.
-
-    The same retriever and the same agent the phone path uses, so the panel
-    is a window on the real thing rather than a demo of a similar one. The
-    answer is generated only when asked, because it is a model call the
-    operator pays for.
-    """
-    if not _internal_caller_allowed(request):
-        return JSONResponse({"error": "forbidden"}, status_code=status.HTTP_403_FORBIDDEN)
-    body = await request.json()
-    question = str(body.get("question") or "").strip()
-    language = str(body.get("language") or "hi")
-    want_answer = bool(body.get("answer"))
-    if not question:
-        return JSONResponse({"error": "question is empty"}, status_code=422)
-    # Which side of the panel is asking. The answer differs, because a
-    # document can be marked for one direction, and an operator testing the
-    # offer script should be shown what an offer call would actually find.
-    direction = str(body.get("direction") or "inbound")
-    retriever = state.retriever or HybridRetriever()
-
-    started = time.perf_counter()
-    async with incall_session() as db:
-        found = await retriever.search(db, question, language=language, scope=direction)
-    retrieval_ms = round((time.perf_counter() - started) * 1000)
-
-    payload: dict[str, Any] = {
-        "passages": [
-            {
-                "documentTitle": chunk.document_title,
-                "section": chunk.section_path or None,
-                "snippet": chunk.content[:600],
-                "score": round(chunk.score, 3),
-                "containsDose": chunk.contains_dose,
-            }
-            for chunk in found.chunks
-        ],
-        "retrievalMs": retrieval_ms,
-        "degraded": found.degraded,
-        "degradedReason": found.degraded_reason,
-        "answer": None,
-    }
-    if want_answer:
-        payload["answer"] = await _answer_for_panel(question, language, direction)
-    return JSONResponse(payload)
-
-
-async def _answer_for_panel(question: str, language: str, direction: str) -> dict[str, Any]:
-    """Run one agent turn the way a call would, and time it."""
-    settings = get_settings()
-    defaults = get_defaults()
-    registry = state.registry or build_registry(lexicon=state.lexicon)
-    organization_id = await _resolve_organization()
-    if organization_id is None:
-        return {"text": None, "totalMs": None, "note": "No organisation is seeded."}
-    started = time.perf_counter()
-    async with incall_session() as db:
-        try:
-            agent_settings = await load_agent_settings(
-                db, organization_id=organization_id, flow_type=FlowType.INBOUND
-            )
-        except Exception as exc:
-            return {"text": None, "totalMs": None, "note": str(getattr(exc, "message", exc))}
-    agent = build_agent(
-        registry=registry,
-        persona=agent_settings.system_prompt,
-        gateway=build_gateway(settings),
-        caller=Caller(language=language or defaults.default_language),
-        call_id=uuid.uuid4(),
-        direction=direction,
-    )
-    try:
-        result = await agent.handle(question)
-    except Exception as exc:
-        log.warning("worker.panel_answer_failed", error=type(exc).__name__)
-        return {
-            "text": None,
-            "totalMs": None,
-            "note": f"The model did not answer ({type(exc).__name__}).",
-        }
-    note = None
-    if result.escalation is not None and getattr(result.escalation, "should_transfer", False):
-        note = "On a call this would be handed to a person."
-    return {
-        "text": result.text,
-        "totalMs": round((time.perf_counter() - started) * 1000),
-        "note": note,
-    }
-
-
-@app.post("/internal/speech/preview")
-async def internal_speech_preview(request: Request) -> JSONResponse:
-    """How a line will be spoken, without spending a vendor call.
-
-    The normaliser that runs before every synthesised sentence (§5.3) is
-    applied to the operator's text, and each token that changed is reported
-    as a substitution -- "₹50" became "पचास रुपये" -- so the panel can show
-    what the farmer will hear.
-    """
-    if not _internal_caller_allowed(request):
-        return JSONResponse({"error": "forbidden"}, status_code=status.HTTP_403_FORBIDDEN)
-    body = await request.json()
-    text = " ".join(str(body.get("text") or "").split())
-    language = str(body.get("language") or get_defaults().default_language)
-    spoken = text_for_speech(text, language=language) if text else ""
-    return JSONResponse(
-        {
-            "spoken": spoken,
-            "words": len(spoken.split()),
-            # Hindi at a helpline pace runs about 2.3 words a second.
-            "seconds": round(len(spoken.split()) / 2.3, 1),
-            "substitutions": _substitutions(text, spoken),
-        }
-    )
-
-
-def _substitutions(original: str, spoken: str) -> list[dict[str, str]]:
-    """Tokens the normaliser rewrote, paired with what replaced them.
-
-    A token-level comparison rather than a diff library: the normaliser only
-    ever expands a token into more words, so walking both lists and pairing
-    an unchanged token with itself is enough to attribute every change.
-    """
-    pairs: list[dict[str, str]] = []
-    before = original.split()
-    after = spoken.split()
-    j = 0
-    for i, token in enumerate(before):
-        if j < len(after) and after[j] == token:
-            j += 1
-            continue
-        # Find where the original resumes; everything in between replaced it.
-        resume = None
-        for k in range(i + 1, len(before)):
-            if before[k] in after[j:]:
-                resume = after.index(before[k], j)
-                break
-        replacement = " ".join(after[j:resume] if resume is not None else after[j:])
-        if replacement and replacement != token:
-            pairs.append({"from": token, "to": replacement})
-        j = resume if resume is not None else len(after)
-    return pairs
-
-
-@app.post("/internal/test-call")
-async def internal_test_call(request: Request) -> JSONResponse:
-    """Place a call to the operator with a draft script (§15.1).
-
-    The number typed in the panel is the approved destination for this one
-    call -- an operator ringing their own phone -- and the draft's id rides in
-    the custom field so the media path speaks that version rather than the
-    published one.
-    """
-    if not _internal_caller_allowed(request):
-        return JSONResponse({"error": "forbidden"}, status_code=status.HTTP_403_FORBIDDEN)
-    body = await request.json()
-    phone = str(body.get("phone") or "").strip()
-    config_id = str(body.get("configId") or "").strip()
-    if not phone or not config_id:
-        return JSONResponse({"error": "phone and configId are required"}, status_code=422)
-
-    from uaagro_domain.phone import normalise_msisdn
-
-    from .adapters.telephony.control import build_adapter
-
-    settings = get_settings()
-    try:
-        destination = normalise_msisdn(phone).e164
-        # Twilio deployments have one number and it is set as the promotional
-        # caller ID; asking for a separate transactional one would refuse a
-        # test call on an account that is otherwise ready to place it.
-        caller_id = (
-            settings.outbound_cli_transactional
-            or settings.twilio_from_number
-            or settings.require("outbound_cli_promotional", needed_for="placing a test call")
-        )
-        adapter = build_adapter(settings, approved=frozenset({destination}))
-        sid = await adapter.originate(
-            to=destination,
-            from_=caller_id,
-            callback_url=f"{settings.public_base_url}/ws/voice",
-            custom_field=f"test:{config_id}",
-        )
-    except Exception as exc:
-        message = getattr(exc, "message", str(exc))
-        remedy = getattr(exc, "remedy", None)
-        log.warning("worker.test_call_failed", error=type(exc).__name__)
-        return JSONResponse(
-            {"error": message, "remedy": remedy, "code": "telephony_unconfigured"},
-            status_code=503,
-        )
-    return JSONResponse({"callSid": sid})
-
-
-@app.post("/internal/speech")
-async def internal_speech(request: Request) -> Response:
-    """Render one line in the configured voice, for the script preview.
-
-    Returns a WAV so a browser can play it directly. Goes through the same
-    normaliser and the same cache as a live call, so what the operator hears
-    is what the farmer will.
-    """
-    if not _internal_caller_allowed(request):
-        return JSONResponse({"error": "forbidden"}, status_code=status.HTTP_403_FORBIDDEN)
-    body = await request.json()
-    text = str(body.get("text") or "").strip()
-    language = str(body.get("language") or get_defaults().default_language)
-    if not text:
-        return JSONResponse({"error": "text is empty"}, status_code=422)
-
-    settings = get_settings()
-    defaults = get_defaults()
-    stack = build_speech_stack(language, settings, defaults)
-    try:
-        spoken = text_for_speech(text, language=stack.tts_config.language)
-        cached = await state.audio_cache.get(spoken, stack.tts_config, provider=stack.tts.provider)
-        pcm = cached
-        if pcm is None:
-            pcm = await stack.tts.synthesise_all(spoken, stack.tts_config)
-            if pcm:
-                await state.audio_cache.put(
-                    spoken, stack.tts_config, pcm, provider=stack.tts.provider
-                )
-    finally:
-        with contextlib.suppress(Exception):
-            await stack.tts.close()
-    if not pcm:
-        return JSONResponse({"error": "the voice returned no audio"}, status_code=502)
-    return Response(
-        content=audio_utils.write_wav(pcm),
-        media_type="audio/wav",
-        headers={"x-spoken-text": spoken.encode("ascii", "backslashreplace").decode("ascii")},
-    )
-
-
-async def _resolve_organization() -> uuid.UUID | None:
-    """The organization this worker serves.
-
-    Single-tenant by deployment (§3), so this is one row rather than a lookup
-    keyed on the dialled number. Cached for the process: it cannot change while
-    the worker is running, and it is on the path of every call's INIT.
-    """
-    global _organization_id
-    if _organization_id is not None:
-        return _organization_id
-    try:
-        async with incall_session() as session:
-            _organization_id = await session.scalar(
-                select(Organization.id).order_by(Organization.created_at).limit(1)
-            )
-    except Exception as exc:
-        log.warning("worker.organization_lookup_failed", error=type(exc).__name__)
-        return None
-    return _organization_id
-
-
 async def _build_pipeline(session: CallSession) -> CallPipeline:
     """Assemble the conversation for one call.
 
@@ -762,7 +502,7 @@ async def _build_pipeline(session: CallSession) -> CallPipeline:
         registry = build_registry(lexicon=state.lexicon)
         state.registry = registry
 
-    organization_id = await _resolve_organization()
+    organization_id = await state.organization()
     if organization_id is None:
         raise RuntimeError("no organization row; run `make db-seed`")
 
@@ -857,7 +597,7 @@ async def voice_stream(websocket: WebSocket) -> None:
     # frame, before anything else references it (§11.1). Resolved here rather
     # than inside the session because the session owns the transport and the
     # call record, and knows nothing about which organisation is seeded.
-    organization_id = await _resolve_organization() if persist else None
+    organization_id = await state.organization() if persist else None
     session = CallSession(
         transport=_WebSocketTransport(websocket),
         serializer=serializer,

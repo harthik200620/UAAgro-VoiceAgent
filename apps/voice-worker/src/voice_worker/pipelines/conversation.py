@@ -53,6 +53,7 @@ from uaagro_domain.settings import CallHandlingSettings, Defaults
 
 from ..adapters.factory import SpeechStack
 from ..adapters.stt.base import SttEvent, SttEventType
+from ..adapters.tts.base import TtsConfig
 from ..flow.address import is_backchannel
 from ..flow.closing import CLOSING_LINE_HI, SILENCE_PROMPT_HI, SILENCE_WARN_HI
 from ..runtime.audio_cache import AudioCache
@@ -279,6 +280,39 @@ class ConversationPipeline:
     #: The goodbye is being said; nothing else starts.
     _ending: bool = False
     _closed: bool = False
+    #: The language the caller was last heard in, as a route code, when it
+    #: differs from the one the call was set up for (§11.1: follow them).
+    _turn_language: str = ""
+    _unvoiced_logged: set[str] = field(default_factory=set, repr=False)
+
+    # -- language --------------------------------------------------------- #
+
+    def _language(self) -> str:
+        return self._turn_language or self.stack.served_by
+
+    def _tts_config(self) -> TtsConfig:
+        return self.stack.voices.get(self._language(), self.stack.tts_config)
+
+    def _follow_language(self, heard: str | None) -> None:
+        """Follow a caller who switches language, when there is a voice for it.
+
+        The recogniser labels each turn with the language it heard. A turn in
+        a language this deployment can speak switches the reply and the voice
+        from the next answer on; one it cannot is answered in the language
+        being served, and said so once in the log rather than every turn.
+        """
+        if not heard:
+            return
+        route = self.stack.language_for(heard)
+        if route is None:
+            bare = heard.split("-")[0].lower()
+            if bare not in self._unvoiced_logged:
+                self._unvoiced_logged.add(bare)
+                log.info("pipeline.language_unvoiced", heard=bare, serving=self._language())
+            return
+        if route != self._language():
+            log.info("pipeline.language_followed", previous=self._language(), now=route)
+            self._turn_language = route
 
     # -- audio in --------------------------------------------------------- #
 
@@ -338,6 +372,7 @@ class ConversationPipeline:
 
             case SttEventType.EAGER_END_OF_TURN:
                 self._note_speech_end(event)
+                self._follow_language(event.language)
                 self._begin_speculation(event.text)
 
             case SttEventType.TURN_RESUMED:
@@ -345,6 +380,7 @@ class ConversationPipeline:
 
             case SttEventType.END_OF_TURN:
                 self._note_speech_end(event)
+                self._follow_language(event.language)
                 await self._on_end_of_turn(event.text or self._transcript)
 
             case SttEventType.ERROR:
@@ -504,7 +540,7 @@ class ConversationPipeline:
         first = True
         try:
             async for chunk in self.responder.respond(
-                speculation.transcript, language=self.stack.served_by
+                speculation.transcript, language=self._language()
             ):
                 await speculation.queue.put(chunk)
                 if first and chunk.strip():
@@ -530,19 +566,19 @@ class ConversationPipeline:
         sentences = split_sentences(chunk)
         if not sentences:
             return
-        speakable = text_for_speech(sentences[0], language=self.stack.tts_config.language)
+        speakable = text_for_speech(sentences[0], language=self._tts_config().language)
         if not speakable:
             return
         try:
             already = await self.cache.get(
-                speakable, self.stack.tts_config, provider=self.stack.tts.provider
+                speakable, self._tts_config(), provider=self.stack.tts.provider
             )
             if already:
                 return
-            audio = await self.stack.tts.synthesise_all(speakable, self.stack.tts_config)
+            audio = await self.stack.tts.synthesise_all(speakable, self._tts_config())
             if audio:
                 await self.cache.put(
-                    speakable, self.stack.tts_config, audio, provider=self.stack.tts.provider
+                    speakable, self._tts_config(), audio, provider=self.stack.tts.provider
                 )
         except asyncio.CancelledError:
             raise
@@ -641,7 +677,7 @@ class ConversationPipeline:
         source = (
             speculation.sentences()
             if speculation is not None
-            else self.responder.respond(transcript, language=self.stack.served_by)
+            else self.responder.respond(transcript, language=self._language())
         )
         self._answer_task = asyncio.create_task(self._answer(source, metrics, outcome))
 
@@ -788,7 +824,7 @@ class ConversationPipeline:
                 self._begin_playback()
                 try:
                     metrics.mark("first_audio_at")
-                    speakable = text_for_speech(text, language=self.stack.tts_config.language)
+                    speakable = text_for_speech(text, language=self._tts_config().language)
                     if not await self.sender.play(speakable or text, pcm):
                         outcome.interrupted = True
                     metrics.mark("audio_sent_at")
@@ -1032,7 +1068,7 @@ class ConversationPipeline:
             return sentences
         position = 0
         for index, sentence in enumerate(sentences):
-            spoken_form = text_for_speech(sentence, language=self.stack.tts_config.language)
+            spoken_form = text_for_speech(sentence, language=self._tts_config().language)
             tokens = script_words(spoken_form or sentence)
             if not tokens:
                 continue
@@ -1059,7 +1095,7 @@ class ConversationPipeline:
         """
         for line in lines:
             for sentence in split_sentences(line):
-                speakable = text_for_speech(sentence, language=self.stack.tts_config.language)
+                speakable = text_for_speech(sentence, language=self._tts_config().language)
                 if speakable:
                     task = asyncio.create_task(self._render(speakable))
                     self._background.add(task)
@@ -1074,7 +1110,7 @@ class ConversationPipeline:
         one nobody does. Bounded by the answer: `_cancel_ahead` stops anything
         still in flight when the turn ends or is interrupted.
         """
-        speakable = text_for_speech(sentence, language=self.stack.tts_config.language)
+        speakable = text_for_speech(sentence, language=self._tts_config().language)
         if not speakable or speakable in self._ahead:
             return
         self._ahead[speakable] = asyncio.create_task(self._render(speakable))
@@ -1082,14 +1118,14 @@ class ConversationPipeline:
     async def _render(self, speakable: str) -> bytes | None:
         try:
             cached = await self.cache.get(
-                speakable, self.stack.tts_config, provider=self.stack.tts.provider
+                speakable, self._tts_config(), provider=self.stack.tts.provider
             )
             if cached is not None:
                 return cached
-            audio = await self.stack.tts.synthesise_all(speakable, self.stack.tts_config)
+            audio = await self.stack.tts.synthesise_all(speakable, self._tts_config())
             if audio:
                 await self.cache.put(
-                    speakable, self.stack.tts_config, audio, provider=self.stack.tts.provider
+                    speakable, self._tts_config(), audio, provider=self.stack.tts.provider
                 )
             return audio or None
         except asyncio.CancelledError:
@@ -1127,7 +1163,7 @@ class ConversationPipeline:
             return False
 
         # §5.3: never hand a raw catalogue string to the synthesiser.
-        speakable = text_for_speech(sentence, language=self.stack.tts_config.language)
+        speakable = text_for_speech(sentence, language=self._tts_config().language)
         if not speakable:
             return True
 
@@ -1145,7 +1181,7 @@ class ConversationPipeline:
         cached = await self._rendered_ahead(speakable)
         if cached is None:
             cached = await self.cache.get(
-                speakable, self.stack.tts_config, provider=self.stack.tts.provider
+                speakable, self._tts_config(), provider=self.stack.tts.provider
             )
         if cached is not None:
             metrics.from_cache = metrics.from_cache or False
@@ -1162,7 +1198,7 @@ class ConversationPipeline:
         # the §7 tts_ttfb budget is written against.
         collected = bytearray()
         first_chunk = True
-        async for chunk in self.stack.tts.synthesise(speakable, self.stack.tts_config):
+        async for chunk in self.stack.tts.synthesise(speakable, self._tts_config()):
             if not chunk.audio:
                 continue
             if first_chunk:
@@ -1185,7 +1221,7 @@ class ConversationPipeline:
             # Cached whole, so the next call skips synthesis entirely (§9.3).
             await self.cache.put(
                 speakable,
-                self.stack.tts_config,
+                self._tts_config(),
                 bytes(collected),
                 provider=self.stack.tts.provider,
             )
@@ -1216,17 +1252,15 @@ class ConversationPipeline:
 
     async def _synthesise(self, text: str) -> bytes:
         """Cached audio where possible, synthesis otherwise (§5.3, §8)."""
-        cached = await self.cache.get(text, self.stack.tts_config, provider=self.stack.tts.provider)
+        cached = await self.cache.get(text, self._tts_config(), provider=self.stack.tts.provider)
         if cached is not None:
             if self._metrics is not None:
                 self._metrics.from_cache = True
             return cached
 
-        audio = await self.stack.tts.synthesise_all(text, self.stack.tts_config)
+        audio = await self.stack.tts.synthesise_all(text, self._tts_config())
         if audio:
-            await self.cache.put(
-                text, self.stack.tts_config, audio, provider=self.stack.tts.provider
-            )
+            await self.cache.put(text, self._tts_config(), audio, provider=self.stack.tts.provider)
         return audio
 
     def _finish_turn(self, metrics: TurnMetrics, outcome: TurnOutcome) -> None:

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}UA Agro — talk to the agent{% endblock %}
+{% block body_attrs %} data-socket="{{ socket }}" data-answer="{{ answering }}"{% endblock %}
+{% block content %}
+<h1>{% if answering %}Answer the call{% else %}Talk to the agent{% endif %}</h1>
+<p class="sub">
+  {% if answering %}
+  The dialer has placed a call to this contact. Pick up as the farmer: same
+  socket, same script, same voice.
+  {% else %}
+  Your microphone stands in for the phone. Same socket, same agent, same voice
+  &mdash; no telephony account involved.
+  {% endif %}
+</p>
+
+<div class="card">
+  <label for="from">Calling as (used to greet you by name, if we know it)</label>
+  <input id="from" value="{{ caller }}" spellcheck="false">
+  <div class="row">
+    <button id="call">{% if answering %}Pick up{% else %}Start the call{% endif %}</button>
+    <button id="hang" disabled>Hang up</button>
+    <span class="status" id="state"><span class="dot"></span>not connected</span>
+  </div>
+  <div class="meter"><i id="level"></i></div>
+</div>
+
+<div class="card"><p id="log">Ready.</p></div>
+
+<p class="note">Speak normally and pause &mdash; the agent answers when it
+  hears you stop. Talk over it to test barge-in: it should stop within a
+  fraction of a second, and carry on where it left off if all you said was
+  "haan". The log shows how long each reply took after you went quiet.</p>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='call.js') }}"></script>
+{% endblock %}

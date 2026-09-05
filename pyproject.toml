@@ -10,6 +10,7 @@ dependencies = [
     "uaagro-voice-worker",
     "uaagro-worker",
     "uaagro-evals",
+    "uaagro-demo",
 ]
 
 [tool.uv.workspace]
@@ -20,6 +21,7 @@ members = [
     "apps/api",
     "apps/voice-worker",
     "apps/worker",
+    "apps/demo",
 ]
 
 [tool.uv.sources]
@@ -29,6 +31,7 @@ uaagro-evals = { workspace = true }
 uaagro-api = { workspace = true }
 uaagro-voice-worker = { workspace = true }
 uaagro-worker = { workspace = true }
+uaagro-demo = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -63,6 +66,7 @@ src = [
     "apps/api/src",
     "apps/voice-worker/src",
     "apps/worker/src",
+    "apps/demo/src",
 ]
 
 [tool.ruff.lint]
@@ -91,7 +95,7 @@ ignore = [
 "scripts/**" = ["T201", "S105", "S603", "S608"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["uaagro_db", "uaagro_domain", "uaagro_evals", "api", "voice_worker", "worker"]
+known-first-party = ["uaagro_db", "uaagro_domain", "uaagro_evals", "api", "voice_worker", "worker", "demo"]
 
 # ---------------------------------------------------------------- mypy
 [tool.mypy]
@@ -109,14 +113,14 @@ mypy_path = [
     "apps/api/src",
     "apps/voice-worker/src",
     "apps/worker/src",
+    "apps/demo/src",
 ]
 
 [[tool.mypy.overrides]]
 module = [
     "opentelemetry.*",
-    "pipecat.*",
     "arq.*",
-    "minio.*",
+    "waitress.*",
     "onnxruntime.*",
     "tokenizers.*",
     "boto3.*",

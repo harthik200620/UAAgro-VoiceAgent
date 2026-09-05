@@ -965,7 +965,9 @@ _CATTLE_FEED: tuple[ProductSeed, ...] = (
     ProductSeed(
         "FEED-CTL-50",
         "Cattle Feed Pellet 20% Protein",
-        "पशु आहार",
+        # Named after the pellet, not the kind: "पशु आहार में हमारे पास पशु
+        # आहार, बाईपास प्रोटीन..." is a list a farmer cannot hear the shape of.
+        "पशु आहार दाना",
         "Khushhali",
         ProductCategory.CATTLE_FEED,
         ProductType.CATTLE_FEED,

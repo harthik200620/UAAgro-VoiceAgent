@@ -70,7 +70,7 @@ def assert_approved_destination(number: str, approved: frozenset[str]) -> str:
     try:
         normalised = str(normalise_msisdn(number).e164)
     except InvalidPhoneNumberError:
-        log.error("telephony.unparseable_destination")
+        log.warning("telephony.unparseable_destination")
         raise AuthorizationError(
             action="dial an unparseable destination",
             resource="telephony",

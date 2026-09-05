@@ -1585,3 +1585,315 @@ from their tables to ours, `data_source_runs` records each pull, and a sync
 upserts centres by code, products by SKU and stock by (centre, variant),
 never deleting. The password is ciphertext under the platform data key. The
 routes and the mapping's field lists are in `docs/ADMIN_API.md`.
+
+## The calls that looped, measured 4 September 2026
+
+Three browser calls on the morning of 4 September asked the same question
+five times. The transcripts in `call_turns` say why, and none of the reasons
+was the model.
+
+**The crop vocabulary was keyed by the wrong spelling.** `crop_targets` on
+the catalogue says `paddy`; `flow/focus.py` said `rice`. "मेरे को राइस का
+सीड्स चाहिए" therefore narrowed to *no* product and the farmer was read the
+first four seeds by SKU -- arhar, bottle gourd, gram, lentil. The keys are the
+catalogue's now, `same_crop` folds the spellings an import might carry
+(`rice`, `mung`, `pigeon pea`), and the tuple opens with the spoken form the
+agent says back.
+
+**A postposition broke the kind.** "पशु की आहार" did not match "पशु आहार".
+`category_in` and `crop_in` now try the utterance with its particles removed
+(`squeeze`), and the vocabulary carries the English a farmer says written in
+Devanagari -- राइस, सीड्स, पेस्टिसाइड, प्राइस -- because that is what the
+recogniser writes.
+
+**One matra put a listed product past the fuzzy threshold.** "मसूरी" against
+"मसूर" scores 0.80 and the catalogue-wide threshold is 0.82 -- correctly, for
+two different products. The lexicon now keeps a stem index (`stem`: the
+inflection stripped from the end of a token) consulted only after exact and
+fuzzy matching have failed, and a stem two SKUs share is dropped from that
+index at build time so it can never resolve to the wrong one.
+
+**The catalogue's own spoken forms were never loaded.** `lexicon_variants` --
+KB §3.1's "highest-leverage column", seeded with "धान का बीज", "सफ़ेद खाद",
+"uria" -- was indexed, documented and not read by `load_lexicon`, which built
+the vocabulary from brands and active ingredients alone. It is read now; the
+vocabulary went from 239 spoken forms to the full set.
+
+**A question back was recorded as a resolved turn.** `_answer_directly`
+called `record_turn(resolved=True)` for every direct reply, including "किस
+चीज़ का स्टॉक देखना है? नाम बता दीजिए।" -- so §11.4's repeat counter never
+moved and the same line was said five times. `DirectAnswer.resolved` is now
+false for a choice, an ambiguity and a plain ask; `ConversationFocus.misses`
+counts them, and `_change_tack` pages the response: the first miss asks, the
+second asks *differently* (the kinds, or how to answer a choice) and offers a
+person, the third says it has not understood and hands over
+(`Agent._handover_turn`, `REPEATED_MISUNDERSTANDING`). A turn that names a
+crop, a kind or a product resets the count -- a farmer narrowing sixteen
+seeds to two is the conversation moving, not the agent failing.
+
+**The choice the agent offered was not remembered.** "पहला वाला ले लेता
+हूँ", "दूसरा", "मसूरी का चाहिए", "सबका रेट बता दो", "उसका प्राइसेस" after a
+list all went back through the catalogue-wide scan. `ConversationFocus.choices`
+now holds what was offered; `_from_choices` reads an ordinal, "all", or a
+name matched loosely (0.6, with a margin) against *those* products only --
+loose is safe there because the field is the two to four products the agent
+itself just named. A price question with a choice pending reads every price
+and keeps the choice standing, so "दूसरा" still means something.
+
+**The model told farmers "the system will tell you".** The inbound persona
+said, of prices and stock, "वह सिस्टम सीधे बता देता है", and the model
+repeated it to the farmer six times in one call. The line now says what to
+do instead and bans the word.
+
+`tests/test_direct_followups.py` replays the three conversations against the
+direct layer, and a replay against the live catalogue (60 products) resolves
+every turn: the rice request lists the two paddy seeds, "मसूरी" lands on
+मसूर के 75, "उसका प्राइसेस" reads four prices, and gibberish ends with a
+manager after two different attempts.
+
+### The language the farmer speaks is followed, not ignored
+
+The recogniser labels every turn with the language it heard, the session
+stored the label on `call_turns`, and nothing between the two read it: an
+English or Marathi turn was answered by the Hindi templates in the Hindi
+voice. §11.1 says follow them. Now:
+
+* `SpeechStack.voices` carries a synthesiser configuration for every other
+  route this deployment has a voice for (`_voices_for_other_languages`:
+  same provider, `BAKBAK_VOICE_*` or `BAKBAK_VOICES` set). The pipeline's
+  `_follow_language` switches the reply language and the voice from the next
+  answer on when the heard language maps to one of them, and logs
+  `pipeline.language_unvoiced` once when it does not. A switch to a language
+  with no voice would be a switch to silence, so it is not made.
+* The direct layer composes **English** natively -- the same facts,
+  `name_en`, digits left for the English voice, "Lucknow centre" -- and
+  stamps `DirectAnswer.language`. For any other language the agent hands the
+  composed Hindi sentence to the model with the tool results alongside and
+  asks for it in the caller's language (`Agent._render_in_language`); the
+  rendering is validated against the same results plus the sentence it came
+  from, and falls back to the Hindi on any failure. A Tamil farmer with a
+  Tamil voice configured hears Tamil; without one, Hindi.
+* `ContextBuilder.build(language=...)` adds a block naming the language when
+  it is not Hindi, outside the cached persona prefix.
+* `text_for_speech` has a non-Hindi path: numerals stay numerals, and the
+  currency and percent signs become the language's words.
+
+What this does not do: change the recogniser's hints mid-call. Soniox
+identifies the language per token regardless, and the hints only bias. A
+returning caller whose preferred language is stored already gets that
+route's engines from the first word.
+
+### "What have you got for cows?" is a question, and the list is its answer
+
+The call at 09:57 on 4 September, after the fixes above were live. The
+farmer asked for "कौ का फीड" (cow feed, the recogniser writing the English
+word as it heard it), was read the four cattle feeds, and asked "कौस के लिए
+क्या-क्या दे सकते हैं?" -- what all can you give for cows. The direct layer
+had a list standing, the words picked none of it, and the turn was booked
+as a *miss*: the second miss changed tack ("कौन सा -- कैल्शियम या पशु आहार?
+पहला या दूसरा बोल दीजिए"), the farmer said no and asked again, and the third
+miss handed the call to a manager. Every reply followed the flow; none of
+them answered the question. Not a model problem -- the model never ran.
+
+What changed, all in `flow/direct.py` and `flow/focus.py`:
+
+* **An overview question is answered, not counted.** `_OVERVIEW` now covers
+  the ways farmers ask what there is -- "क्या-क्या", "क्या दे सकते हैं",
+  "क्या है आपके पास", "क्या मिलेगा", "what do you have for", "what is
+  available" -- and `_overview()` answers it with the list as a *resolved*
+  turn: the miss counter resets, the list read out stays the offered choice
+  ("पहला वाला" still works), and asking twice gets the list twice. The
+  guard is that the words name no product: "यूरिया क्या मिलेगा" is still a
+  stock lookup. The kind in the words beats the kind in focus ("खाद में
+  क्या-क्या है?" after a seed list is about fertiliser), and a kind with a
+  single product is looked up outright rather than offered as a list of one.
+* **The animals name the kind.** "गाय", "भैंस", "cow", "cows", and the
+  Devanagari the recogniser produces for them ("कौ", "कौस", "काऊ") all
+  resolve to cattle feed, as "पशु" already did.
+* **A kind's own name is not a product.** The plain pellet was catalogued as
+  "पशु आहार", the same words as its category, so "पशु आहार में क्या-क्या है?"
+  matched the product and became a composition question. `is_kind_word`
+  drops a mention whose matched text is nothing but a kind's name; the kind
+  narrowing lists what there is. The seed row is renamed "पशु आहार दाना" so
+  the list no longer reads "पशु आहार में हमारे पास ... पशु आहार ...".
+* **"और क्या-क्या है?" continues the list.** `ConversationFocus.listed`
+  remembers every product read out for the kind under discussion;
+  "what else" reads the next four, then says there are no more -- never the
+  same four again. A choice cut at four now says "और भी हैं" so the farmer
+  knows to ask.
+* **The second miss names every offer.** With four products standing, the
+  change of tack named two. It names all of them, and says how to answer.
+
+`tests/test_direct_followups.py` replays the 09:57 call and the variants
+(English, "गाय के लिए", the kind switch, the composition-shaped question,
+"what else"); the live-catalogue replay resolves every turn without a
+hand-over, and the noise conversation still hands over on the third miss.
+
+### "Is this for cows?" is answered about cows, in the farmer's words
+
+The call at 10:39, after the list fix. The farmer asked for "कौ का फीड",
+heard the four cattle feeds, and then asked five times, five ways, whether
+it was for cows -- "वो कौ का फीड ही है न?", "is it cow feed only?", "that
+cattle feed can be used for cow?", "Cow and buffalo?" -- and heard the same
+list five times, always as "पशु आहार", never once with the word cow in it.
+"can be used" even matched the fertiliser CAN and read out its price. The
+complaint was exact: the agent followed its flow and never answered the
+question, and it never spoke the way the farmer was speaking.
+
+What changed, in `flow/focus.py`, `flow/direct.py` and `flow/phrasebook.py`:
+
+* **The animals are a thing the conversation is about.** `ANIMAL_WORDS`
+  names cows, buffaloes, goats and poultry in the ways they are said,
+  including what the recogniser makes of "cow" in a Hindi sentence ("कौ",
+  "कौस", "कौका", "काऊ"). `ConversationFocus.animals` remembers them, and
+  every list and choice about feed is said *for them*: "गाय के लिए हमारे
+  पास ..." and "For cows we have ...", not "पशु आहार में ...".
+* **"Is it for cows?" is a question with an answer.** `_SUITABILITY` reads
+  the yes-or-no forms ("ही है न", "को दे सकते हैं", "can be used for",
+  "right?", "cow and buffalo?" on its own), and `_animal_question` answers
+  from what the kind *is*: `ANIMALS_FED` says cattle feed is for cows and
+  buffaloes -- the meaning of the word, not advice on what to give. So: "हाँ,
+  ये सब गाय के लिए ही हैं — ...। कौन सा देखूँ?"; for a product in hand,
+  "हाँ, पशु आहार दाना भैंस के लिए ही है। रेट और स्टॉक बताऊँ?"; for a goat or a
+  hen, "गाय-भैंस के लिए है, बकरी के लिए नहीं" and a person is offered; for
+  urea, "खाद है, पशुओं को खिलाने की चीज़ नहीं" and the feed is offered. The
+  same check guards the stock path, so "बकरी का दाना है क्या?" is not
+  answered with a price.
+* **The offer at the end of a line is kept.** "बताऊँ?" followed by "हाँ"
+  does what was offered (`ConversationFocus.offered`: a listing or a
+  lookup), for one turn.
+* **The farmer's word for the kind is said back.** `kind_word` keeps the
+  word they used -- "फीड", "दाना", "seeds" -- and the phrasebook uses it
+  when it is in the reply's script, so a farmer who said "फीड" hears
+  "फीड में हमारे पास ...". Generic words ("जानवर", "cattle") are not echoed.
+* **The same sentence is never said twice running as if it were new.** A
+  reply identical to the last is prefixed "जी, दोबारा बता देता हूँ।" /
+  "Once more:"; a suitability question asked a second way gets a shorter
+  second answer ("जी हाँ, गाय के लिए ही है। बोलिए, कौन सा देखूँ?").
+* **"can" is not a product.** Latin catalogue forms that are English
+  function words (`_NOT_A_NAME`) no longer match.
+
+The 10:39 call replayed through the real agent -- real tools, real centre,
+the model refusing -- now runs: list for cows, repeat owned, "yes, all of
+these are for cows", the shorter second yes, "yes, for cows and buffaloes",
+the second one's stock, "yes, the pellet is for buffaloes too".
+
+### Crops get the same treatment
+
+The catalogue tags seeds and sprays with the crops they are for
+(`crop_targets`); fertiliser, feed and tools carry no tags. Three things
+followed from reading that honestly:
+
+* **A crop on its own is listed by kind.** "गेहूँ के लिए क्या-क्या है?" used
+  to read four unlabelled products cut from a mixed list. `_crop_listing`
+  answers "गेहूँ के लिए हमारे पास बीज में गेहूँ डीबीडब्ल्यू 187 और गेहूँ एचडी
+  3086 और दवा में टू फोर डी, कार्बेन्डाज़िम, इमिडाक्लोप्रिड वग़ैरह हैं। बीज या
+  दवा — क्या देखूँ?", and what was read is the offered choice.
+* **A kind with no crop tags is not narrowed by the crop.** "गेहूँ के लिए
+  खाद है क्या?" used to say "गेहूँ का खाद अभी नहीं है" -- the data does not
+  distinguish fertiliser by crop, so the fertilisers are listed
+  (`_kind_tagged`).
+* **"Is this for wheat?" is answered from the tags.** `_crop_question`:
+  "हाँ, कार्बेन्डाज़िम गेहूँ के लिए है (गेहूँ और चना के लिए है)। रेट और स्टॉक
+  बताऊँ?"; "बिस्पायरिबैक धान के लिए है, गेहूँ के लिए नहीं। गेहूँ के लिए दवा में
+  ... हैं। कौन सा देखूँ?"; "और धान में?" straight after keeps the product in
+  hand and answers for the next crop. A product without tags (urea) is
+  handed to the model, which has the knowledge base -- a stock figure is not
+  an answer to "can I put it on wheat?". The advice intents (what to put on
+  a crop, how much) are never read as this; §16.2 stands.
+* **The vocabulary covers the belt.** Thirty more crops (बाजरा, जौ, मेंथा,
+  the vegetables) and the ``vegetables`` tag matches any vegetable
+  (`VEGETABLES`, `crop_fits`), so "बाजरा के लिए क्या है?" is "बाजरा के लिए
+  अभी कुछ नहीं है" rather than "which product?". A crop's name on its own
+  is never read as a product, even where a catalogue row lists it as a
+  spoken form (`is_crop_word`): "आलू" is the crop, and the potato seed is
+  one of the things listed for it.
+* **A crop said on its own does not inherit a kind the crop cannot narrow.**
+  "बाजरा" after the fertilisers used to list the fertilisers "for bajra";
+  the kind carries over only when it is tagged by crop (`_inherited_kind`),
+  so "धान" after a seed list is still the paddy seeds.
+* **The first word of a long English name resolves it.** "bispyribac" for
+  "Bispyribac Sodium 10% SC" (`Lexicon._by_head`): unique heads of six
+  letters or more, none where two products share one ("Calcium ...").
+
+## An upgrade pass, 4 September 2026 (afternoon)
+
+The brief asked for the backend to be "changed to Flask" and, in the same
+sentence, for "FastAPI for the endpoints". The backend is Python end to end
+and FastAPI already is the API framework; Flask is a synchronous WSGI
+framework with no native WebSocket or asyncio support, and putting it under
+a real-time audio path would be a downgrade. FastAPI stays. What the pass did
+instead was survey the whole codebase for what a senior engineer would
+actually change, and change that -- measured, not rewritten for its own sake.
+
+**What the survey found.** No TODOs. Two genuinely dead variables. No
+blocking I/O on the audio path (the only ``wave.open`` calls are in-memory).
+Two per-row query loops in the API. Thirteen ``log.error`` calls inside
+``except`` blocks, so the traceback that would explain the failure was never
+written. Six functions past the complexity line, four of them in the direct
+layer after the morning's fix interleaved Hindi and English wording through
+twenty-five branches. A 910-line worker entry module carrying the panel's
+endpoints beside the media socket. A zero-width space pasted into a source
+file. Two mypy overrides for packages that are not dependencies.
+
+**What changed.**
+
+* `flow/phrasebook.py` now holds every sentence the direct layer says, as
+  two implementations of one abstract `Phrasebook` (Hindi, English). The
+  direct layer decides what is true and hands names and numbers over; it
+  no longer knows which language it is speaking. Its longest method went
+  from complexity 28 to 12, and a third language is one more class.
+* `SonioxSTT._handle` is three functions: ingest the tokens, decide the
+  turn, emit the progress events. Same behaviour, seventeen tests unchanged.
+* Contact import ran two queries per phone number -- a thousand-number
+  upload was two thousand round trips inside one request. It is now two
+  queries for the list. The scheduled-source check ran one query per source
+  for the latest good run; it is one grouped query.
+* Unexpected failures log with `log.exception` and carry their traceback;
+  expected conditions -- a full event queue, a refused campaign, a tool
+  timeout -- log as warnings, because a traceback there is noise.
+* The panel's four internal endpoints moved from `main.py` to
+  `routes/panel.py`, bound to the process state through a router factory.
+  The organisation lookup that was a module global with a `global`
+  statement is a cached method on `WorkerState`. The entry module is 655
+  lines and reads as lifespan, health, socket.
+* The hygiene: the zero-width characters are named by escape, the
+  `os.path` calls in the object store are `pathlib`, the stale overrides
+  are gone, a loop no longer shadows its own variables.
+
+**What was looked at and left.** Relative imports (consistent, deliberate),
+lazy imports inside functions (optional dependencies), blind `except` on the
+audio path (a call must not die on a logging error), camel-case Pydantic
+fields (the panel's JSON contract), and `Decimal("100.00")` constructors in
+seeds (the strings are the honest representation of paise). Each is a
+lint category that would have produced a large diff and no better system.
+
+Gates at the end of the pass: ruff clean, `mypy --strict` clean across 180
+source files, 1,343 tests passing.
+
+### The demo backend is Flask, and the API is FastAPI
+
+The brief asked for both, and both are the right tool where each now sits.
+`apps/demo` is a Flask application -- an app factory, a blueprint, Jinja
+templates, a static file -- served by waitress, a production WSGI server, so
+it ships from the same container image as every other service. It owns the
+demo surface: a stack status page that probes the worker and the API and
+refreshes itself, the browser call page (the microphone stands in for the
+phone; the page opens the same media socket a carrier opens), and the page
+that answers a simulated outbound call as the farmer.
+
+It is a client of the stack, never in it. The media socket, the health
+routes, the panel's internal endpoints and the control plane stay on
+FastAPI: a 20 ms-frame WebSocket on an asyncio loop has no business on a
+WSGI server, and no request/response page has any business on the audio
+path. The worker's old `/dev/call` address redirects to the demo so older
+links and panel builds still land somewhere useful; the panel's own link
+(`browserCallUrl`, `answerUrl`) now points at the demo directly, through
+`DEMO_PUBLIC_URL`.
+
+The call page embeds the socket token, so it is served only when
+`APP_ENV=development` -- the same rule the worker's page had -- and the
+`answer` parameter is accepted only as a UUID, never echoed. Tests drive the
+app through Flask's test client with a mock transport for the probes; no
+worker, no API, no network.
+

@@ -271,7 +271,7 @@ class LocalObjectStore:
         serving ``../../.env`` to a recording request.
         """
         parts = [p for p in key.split("/") if p]
-        if not parts or any(p in {".", ".."} or os.path.isabs(p) for p in parts):
+        if not parts or any(p in {".", ".."} or Path(p).is_absolute() for p in parts):
             raise VendorError(
                 "Invalid object key.",
                 remedy="Keys are relative paths built from ids; this one is not.",
@@ -293,7 +293,7 @@ class LocalObjectStore:
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_name(path.name + ".part")
             temporary.write_bytes(data)
-            os.replace(temporary, path)
+            temporary.replace(path)
             sidecar = {"content_type": content_type, "metadata": dict(metadata or {})}
             path.with_name(path.name + _META_SUFFIX).write_text(
                 json.dumps(sidecar), encoding="utf-8"

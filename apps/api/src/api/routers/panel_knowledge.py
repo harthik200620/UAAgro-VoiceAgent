@@ -497,7 +497,9 @@ async def _ingest_inline(document_id: uuid.UUID) -> None:
         async with system_session() as session:
             outcome = await ingest_pending_document(session, document_id)
     except Exception as exc:
-        log.error("knowledge.inline_failed", document_id=str(document_id), error=type(exc).__name__)
+        log.exception(
+            "knowledge.inline_failed", document_id=str(document_id), error=type(exc).__name__
+        )
         await _mark_failed(
             document_id,
             f"Indexing failed here ({type(exc).__name__}). Start the background worker "

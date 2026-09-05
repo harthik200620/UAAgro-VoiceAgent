@@ -164,9 +164,7 @@ class GateReport:
             if count:
                 parts.append(f"{check.value} removed {count}")
         if self.blocked_by:
-            parts.append(
-                "BLOCKED: " + ", ".join(c.value for c in self.blocked_by)
-            )
+            parts.append("BLOCKED: " + ", ".join(c.value for c in self.blocked_by))
         return "; ".join(parts)
 
 
@@ -220,9 +218,7 @@ def evaluate(
         # every call it places, so it does not run at all.
         report.blocked_by.append(Check.CALLER_ID_SERIES)
 
-    if campaign.is_promotional and not (
-        campaign.dlt_entity_id and campaign.dlt_template_id
-    ):
+    if campaign.is_promotional and not (campaign.dlt_entity_id and campaign.dlt_template_id):
         report.blocked_by.append(Check.DLT_REGISTRATION)
 
     if not within_calling_window(campaign.dial_at or moment):
@@ -265,9 +261,7 @@ def first_failure(
     return failures[0] if failures else None
 
 
-def _contact_failures(
-    contact: Contact, campaign: CampaignSettings, now: datetime
-) -> list[Check]:
+def _contact_failures(contact: Contact, campaign: CampaignSettings, now: datetime) -> list[Check]:
     """Every reason this contact is excluded.
 
     All of them, not the first. The counts in the report are what tell an
@@ -314,9 +308,7 @@ def _contact_failures(
     return failures
 
 
-def next_retry(
-    outcome: str, *, last_attempt: datetime, attempts: int
-) -> datetime | None:
+def next_retry(outcome: str, *, last_attempt: datetime, attempts: int) -> datetime | None:
     """§13.3's retry policy. ``None`` means never again.
 
     The table is the specification; this is it in code so that "opted out" and

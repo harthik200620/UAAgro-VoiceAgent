@@ -19,7 +19,13 @@ from typing import Any, ClassVar
 import pytest
 
 from uaagro_domain import livefeed
-from uaagro_domain.enums import CallDirection, CallOutcome, Intent, TransferReason
+from uaagro_domain.enums import (
+    CallDirection,
+    CallOutcome,
+    Intent,
+    TelephonyProvider,
+    TransferReason,
+)
 from uaagro_domain.livefeed import LiveEvent
 from voice_worker.adapters.telephony.exotel import ExotelSerializer
 from voice_worker.flow.agent import CALLBACK_COMMITMENT_HI, Agent
@@ -276,12 +282,14 @@ class _Built:
 
 
 class _Adapter:
-    """Call control that records the hand-over it was asked for, or refuses."""
+    """Call control that records what it was asked for, or refuses."""
 
     def __init__(self, approved: frozenset[str], *, fail: bool) -> None:
         self.approved = approved
         self.fail = fail
         self.transfers: list[dict[str, Any]] = []
+        self.hangups: list[str] = []
+        self.closed = False
 
     async def transfer(self, *, call_sid: str, to: str, whisper_text: str | None = None) -> None:
         if self.fail:
@@ -289,6 +297,14 @@ class _Adapter:
         self.transfers.append(
             {"call_sid": call_sid, "to": to, "whispered": whisper_text is not None}
         )
+
+    async def hangup(self, *, call_sid: str) -> None:
+        if self.fail:
+            raise RuntimeError("provider said no")
+        self.hangups.append(call_sid)
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 def _session(
@@ -299,6 +315,7 @@ def _session(
     adapters: list[_Adapter],
     *,
     fail: bool,
+    provider: TelephonyProvider | None = None,
 ) -> CallSession:
     async def factory(_: CallSession) -> _Built:
         return _Built(pipeline)
@@ -317,6 +334,7 @@ def _session(
         live_feed=feed,
         our_numbers=OurNumbers(inbound=frozenset({"1800123456"}), outbound=frozenset()),
         transfer_adapter=adapter_for,
+        provider=provider,
     )
 
 

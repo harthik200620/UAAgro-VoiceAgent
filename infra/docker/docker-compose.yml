@@ -242,6 +242,27 @@ services:
   # rather than at boot -- `docker compose run --rm simulator` -- because a
   # container that dials the worker every time the stack comes up would fill
   # the call table with noise.
+  # The Flask demo backend: the browser call page and a stack status page.
+  # Its own profile -- a demo is not part of a production stack.
+  demo:
+    profiles: ["demo"]
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.python
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      APP_ENV: development
+      VOICE_WORKER_PUBLIC_URL: http://127.0.0.1:8080
+      API_PUBLIC_URL: http://127.0.0.1:8000
+    depends_on:
+      voice-worker:
+        condition: service_healthy
+    ports:
+      - "8090:8090"
+    command: ["uaagro-demo", "--host", "0.0.0.0", "--port", "8090"]
+
   simulator:
     profiles: ["tools"]
     build:

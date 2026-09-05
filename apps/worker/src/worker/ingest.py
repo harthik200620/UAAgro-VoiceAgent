@@ -101,7 +101,7 @@ async def ingest_pending_document(session: AsyncSession, document_id: uuid.UUID)
     except UAAgroError as exc:
         return await _failed(session, document, exc.message)
     except Exception as exc:
-        log.error("ingest.failed", document_id=str(document_id), error=type(exc).__name__)
+        log.exception("ingest.failed", document_id=str(document_id), error=type(exc).__name__)
         return await _failed(session, document, f"Indexing failed ({type(exc).__name__}).")
 
     await session.refresh(document)

@@ -334,7 +334,7 @@ class SonioxSTT(STTService):
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
-            log.error("stt.event_queue_full", provider=self.provider)
+            log.warning("stt.event_queue_full", provider=self.provider)
             task = asyncio.get_running_loop().create_task(self._queue.put(event))
             # Held so the loop's weak reference cannot collect it mid-flight.
             self._overflow.add(task)
@@ -362,36 +362,10 @@ class SonioxSTT(STTService):
         if not isinstance(tokens, list):
             return []
 
-        events: list[SttEvent] = []
-        ended = False
-        new_final = ""
-        pending = ""
-
-        for token in tokens:
-            if not isinstance(token, dict):
-                continue
-            text = str(token.get("text", ""))
-            if text == FIN_MARKER:
-                continue
-            if text == END_MARKER:
-                ended = True
-                continue
-            if token.get("is_final"):
-                new_final += text
-                confidence = token.get("confidence")
-                if isinstance(confidence, int | float):
-                    self._confidences.append(float(confidence))
-                language = token.get("language")
-                if isinstance(language, str) and language:
-                    self._languages[language] += 1
-            else:
-                pending += text
-
-        if new_final:
-            self._final_text += new_final
-        self._pending_text = pending
-
+        ended = self._ingest(tokens)
         heard = (self._final_text + self._pending_text).strip()
+
+        events: list[SttEvent] = []
         if heard and not self._speech_started:
             self._speech_started = True
             events.append(SttEvent(type=SttEventType.SPEECH_STARTED))
@@ -402,6 +376,46 @@ class SonioxSTT(STTService):
             self._reset_turn()
             return events
 
+        events.extend(self._progress_events(heard, payload))
+        return events
+
+    def _ingest(self, tokens: list[Any]) -> bool:
+        """Fold one message's tokens into the turn. Returns True at the end marker.
+
+        Final tokens accumulate; provisional ones replace what was provisional
+        before, because the recogniser resends its whole current guess. The
+        per-token confidence and language tallies feed the end-of-turn event.
+        """
+        ended = False
+        new_final = ""
+        pending = ""
+        for token in tokens:
+            if not isinstance(token, dict):
+                continue
+            text = str(token.get("text", ""))
+            if text == FIN_MARKER:
+                continue
+            if text == END_MARKER:
+                ended = True
+                continue
+            if not token.get("is_final"):
+                pending += text
+                continue
+            new_final += text
+            confidence = token.get("confidence")
+            if isinstance(confidence, int | float):
+                self._confidences.append(float(confidence))
+            language = token.get("language")
+            if isinstance(language, str) and language:
+                self._languages[language] += 1
+        if new_final:
+            self._final_text += new_final
+        self._pending_text = pending
+        return ended
+
+    def _progress_events(self, heard: str, payload: dict[str, Any]) -> list[SttEvent]:
+        """The events for a turn still in progress, and the eager timer."""
+        events: list[SttEvent] = []
         if self._eager_sent and script_words(heard) != script_words(self._eager_text):
             # §5.2: the caller carried on. Whatever was generated on the eager
             # signal must be cancelled -- an orphaned generation that still
@@ -428,7 +442,8 @@ class SonioxSTT(STTService):
         # a pause between words looks exactly like this for a moment.
         changed = heard != self._last_heard or self._eager_handle is None
         if heard and not self._eager_sent and changed:
-            self._arm_eager(self._eager_stable_delay_s if pending else self._eager_delay_s)
+            provisional = bool(self._pending_text)
+            self._arm_eager(self._eager_stable_delay_s if provisional else self._eager_delay_s)
         self._last_heard = heard
 
         return events

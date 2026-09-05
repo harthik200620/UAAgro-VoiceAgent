@@ -17,7 +17,8 @@ to return a mismatched pair.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 import structlog
 
@@ -66,6 +67,28 @@ class SpeechStack:
     #: equivalent.
     quality_tier: QualityTier
     tier_note: str
+    #: Synthesiser configurations for the other languages this deployment has
+    #: a voice for, by route code. §11.1 follows a caller who switches
+    #: language; a switch to a language with no voice would be a switch to
+    #: silence, so only these are offered.
+    voices: Mapping[str, TtsConfig] = field(default_factory=dict)
+
+    def language_for(self, heard: str | None) -> str | None:
+        """The route a recogniser's language code lands on, or None.
+
+        Recognisers report bare ISO codes (``mr``); routes are BCP-47
+        (``mr-IN``). The language being served always maps; another maps
+        only when a voice exists for it.
+        """
+        if not heard:
+            return None
+        bare = heard.split("-")[0].lower()
+        if self.served_by.split("-")[0].lower() == bare:
+            return self.served_by
+        for code in self.voices:
+            if code.split("-")[0].lower() == bare:
+                return code
+        return None
 
 
 def build_stt(
@@ -183,6 +206,38 @@ def _voice_for(route: LanguageRoute, settings: Settings) -> str | None:
     return settings.sarvam_tts_speaker_hi or route.tts.voice
 
 
+def _voices_for_other_languages(
+    route: LanguageRoute, served_by: str, settings: Settings, defaults: Defaults
+) -> dict[str, TtsConfig]:
+    """A synthesiser configuration for every other language with a voice.
+
+    Same provider as the route being served: the call holds one synthesiser
+    connection, and following a caller into a language a different vendor
+    speaks would mean opening another mid-turn. A route without a configured
+    voice is left out rather than given one -- §5.3 chooses voices in a
+    bake-off, and the adapters treat a missing voice as a missing credential.
+    """
+    assert route.tts is not None
+    voices: dict[str, TtsConfig] = {}
+    for code, other in defaults.language_routes.items():
+        if code == served_by or other.tts is None or other.routes_to is not None:
+            continue
+        if other.tts.provider != route.tts.provider:
+            continue
+        speaker = _voice_for(other, settings)
+        if speaker is None:
+            continue
+        voices[code] = TtsConfig(
+            language=other.tts.language,
+            model=other.tts.model,
+            speaker=speaker,
+            pace=defaults.tts.pace,
+            sample_rate=settings.tts_output_sample_rate,
+            codec=settings.tts_output_codec,
+        )
+    return voices
+
+
 def build_turn_detector(route: LanguageRoute, *, defaults: Defaults | None = None) -> TurnDetector:
     """Construct the turn detector this route calls for (§5.2)."""
     if route.turn is None:
@@ -237,6 +292,7 @@ def build_speech_stack(
         route, settings, keyterms=keyterms, slow_speaker=slow_speaker, defaults=defaults
     )
     tts, tts_config = build_tts(route, settings, defaults=defaults)
+    voices = _voices_for_other_languages(route, served_by, settings, defaults)
     detector = build_turn_detector(route, defaults=defaults)
 
     _assert_compatible(stt, detector, language=language)
@@ -260,6 +316,7 @@ def build_speech_stack(
         turn_detector=detector,
         quality_tier=route.quality_tier,
         tier_note=route.tier_note_en,
+        voices=voices,
     )
 
 

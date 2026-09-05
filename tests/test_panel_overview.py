@@ -351,7 +351,7 @@ def test_telephony_names_the_missing_variables() -> None:
     assert "EXOTEL_SID" in (status.remedy or "")
     assert "TELEPHONY_PROVIDER=simulator" in (status.remedy or "")
     assert status.inboundNumber is None
-    assert status.browserCallUrl == "http://127.0.0.1:8080/dev/call"
+    assert status.browserCallUrl == "http://127.0.0.1:8090/call"
 
 
 # --------------------------------------------------------------------------- #

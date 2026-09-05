@@ -181,7 +181,7 @@ export type TelephonyStatus = {
   inboundNumber: string | null;
   /** What to set when not configured. */
   remedy: string | null;
-  /** The worker's /dev/call page, development only. */
+  /** The demo backend's browser call page, development only. */
   browserCallUrl: string | null;
 };
 

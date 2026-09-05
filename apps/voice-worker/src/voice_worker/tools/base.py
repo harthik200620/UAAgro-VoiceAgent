@@ -380,7 +380,7 @@ class ToolRegistry:
                     attempt += 1
                     log.warning("tools.timeout_retrying", tool=name, attempt=attempt)
                     continue
-                log.error("tools.timeout", tool=name, timeout_ms=timeout_ms)
+                log.warning("tools.timeout", tool=name, timeout_ms=timeout_ms)
                 return ToolResult(
                     tool=name,
                     ok=False,
@@ -410,7 +410,7 @@ class ToolRegistry:
                 elapsed = (time.perf_counter() - started) * 1000
                 # A stack trace must never reach the audio path. §11.4 turns
                 # this into a hold phrase and, if it repeats, an escalation.
-                log.error("tools.failed", tool=name, error=type(exc).__name__)
+                log.exception("tools.failed", tool=name, error=type(exc).__name__)
                 return ToolResult(
                     tool=name,
                     ok=False,

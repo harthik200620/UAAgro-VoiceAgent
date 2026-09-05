@@ -157,7 +157,7 @@ async def dial_campaign(ctx: dict[str, Any], campaign_id: str) -> str:
         # exception, and retrying a compliance block is the override §13.1
         # exists to prevent. The campaign is already marked and the panel says
         # which checks failed.
-        log.error("campaign.refused", campaign_id=campaign_id, checks=str(blocked))
+        log.warning("campaign.refused", campaign_id=campaign_id, checks=str(blocked))
         return f"blocked: {blocked}"
     return report.summary()
 

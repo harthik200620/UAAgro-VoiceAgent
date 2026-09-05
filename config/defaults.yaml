@@ -304,8 +304,8 @@ knowledge:
 # -----------------------------------------------------------------------------
 call_handling:
   silence_first_prompt_s: 6
-  silence_second_prompt_s: 15
-  silence_abandon_s: 25
+  silence_second_prompt_s: 12   # "और कुछ पूछना हो तो बताइए" -- a "नहीं" to this ends the call
+  silence_abandon_s: 20         # goodbye, then the line is dropped from our side
   hold_patience_s: 25             # caller asks to wait -- hold silently this long
   low_asr_confidence: 0.55
   low_asr_consecutive_turns_to_escalate: 3

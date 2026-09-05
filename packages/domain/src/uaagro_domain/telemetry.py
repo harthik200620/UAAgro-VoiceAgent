@@ -126,8 +126,17 @@ TOTAL_P50_WITH_TOOL_TARGET_MS = 810
 #: unbounded and a §23-6 violation in the metrics backend, which is a place
 #: nobody thinks to look for PII.
 FORBIDDEN_LABELS = frozenset(
-    {"call_id", "call_ref", "phone", "phone_hash", "farmer_id", "transcript",
-     "stream_sid", "session_id", "user_id"}
+    {
+        "call_id",
+        "call_ref",
+        "phone",
+        "phone_hash",
+        "farmer_id",
+        "transcript",
+        "stream_sid",
+        "session_id",
+        "user_id",
+    }
 )
 
 
@@ -240,23 +249,17 @@ class Instruments:
                 provider = TracerProvider(resource=resource)
                 # Batched, not synchronous: a span export inside a turn would
                 # put a collector's latency on the caller's critical path.
-                provider.add_span_processor(
-                    BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint))
-                )
+                provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
                 trace.set_tracer_provider(provider)
                 self._tracer = trace.get_tracer(service_name)
-                readers.append(
-                    PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=endpoint))
-                )
+                readers.append(PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=endpoint)))
 
         if not readers and self._tracer is None:
             log.info("telemetry.disabled", reason="no exporter available")
             return
 
         if readers:
-            metrics.set_meter_provider(
-                MeterProvider(resource=resource, metric_readers=readers)
-            )
+            metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=readers))
             self._meter = metrics.get_meter(service_name)
 
         self.enabled = True
@@ -280,9 +283,7 @@ class Instruments:
             return b"", "text/plain; charset=utf-8"
         return generate_latest(), CONTENT_TYPE_LATEST
 
-    def record(
-        self, metric: Metric, value: float, **labels: str
-    ) -> None:
+    def record(self, metric: Metric, value: float, **labels: str) -> None:
         """Record one measurement."""
         _check_labels(labels)
         self.recorded.append((metric.value, value, dict(labels)))
@@ -322,9 +323,7 @@ class Instruments:
             yield
 
     @contextmanager
-    def timed_segment(
-        self, segment: Segment, *, language: str = "unknown"
-    ) -> Iterator[None]:
+    def timed_segment(self, segment: Segment, *, language: str = "unknown") -> Iterator[None]:
         """Time one §7 segment and record it against the budget."""
         started = time.perf_counter()
         try:

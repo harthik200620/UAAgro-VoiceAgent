@@ -183,9 +183,7 @@ async def _latest_consents(
         .subquery()
     )
     latest = select(ranked.c.id).where(ranked.c.rank == 1)
-    rows = (
-        await session.scalars(select(ConsentRecord).where(ConsentRecord.id.in_(latest)))
-    ).all()
+    rows = (await session.scalars(select(ConsentRecord).where(ConsentRecord.id.in_(latest)))).all()
 
     # Expiry is the gate's decision, not this function's. Filtering expired rows
     # out here would turn "consent expired" into "consent missing", and the
@@ -195,13 +193,9 @@ async def _latest_consents(
     return {row.farmer_id: row for row in rows}
 
 
-async def _dnd_by_hash(
-    session: AsyncSession, phone_hashes: list[bytes]
-) -> dict[bytes, DndStatus]:
+async def _dnd_by_hash(session: AsyncSession, phone_hashes: list[bytes]) -> dict[bytes, DndStatus]:
     rows = (
-        await session.scalars(
-            select(DndStatus).where(DndStatus.phone_hash.in_(phone_hashes))
-        )
+        await session.scalars(select(DndStatus).where(DndStatus.phone_hash.in_(phone_hashes)))
     ).all()
     return {row.phone_hash: row for row in rows}
 

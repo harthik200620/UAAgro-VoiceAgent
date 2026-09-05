@@ -33,7 +33,7 @@ from decimal import Decimal
 from typing import Any
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from uaagro_db.audit import append_audit
@@ -682,13 +682,21 @@ async def due_sources(
                 .order_by(DataSource.created_at)
             )
         ).all()
-        for source in sources:
-            last = await session.scalar(
-                select(DataSourceRun.started_at)
-                .where(DataSourceRun.source_id == source.id, DataSourceRun.status == "ok")
-                .order_by(DataSourceRun.started_at.desc())
-                .limit(1)
+        if not sources:
+            return due
+        # The latest good run of every source at once. One query per source
+        # was fine for three sources and is the wrong shape for thirty.
+        rows = await session.execute(
+            select(DataSourceRun.source_id, func.max(DataSourceRun.started_at))
+            .where(
+                DataSourceRun.source_id.in_([s.id for s in sources]),
+                DataSourceRun.status == "ok",
             )
+            .group_by(DataSourceRun.source_id)
+        )
+        latest: dict[uuid.UUID, datetime] = {source_id: last for source_id, last in rows.all()}
+        for source in sources:
+            last = latest.get(source.id)
             if last is None or moment - last >= INTERVALS[source.schedule] - SCHEDULE_SLACK:
                 due.append(source.id)
     return due

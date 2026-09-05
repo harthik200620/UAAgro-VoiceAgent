@@ -143,9 +143,7 @@ def align(reference: str, hypothesis: str) -> Alignment:
         previous = current
 
     _, subs, dels, ins = previous[-1]
-    return Alignment(
-        substitutions=subs, deletions=dels, insertions=ins, reference_length=len(ref)
-    )
+    return Alignment(substitutions=subs, deletions=dels, insertions=ins, reference_length=len(ref))
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,9 +214,7 @@ class WerReport:
 
     def table(self) -> str:
         rows = ["condition            n    WER    sub   del   ins"]
-        for result in sorted(
-            self.by_condition.values(), key=lambda r: r.wer, reverse=True
-        ):
+        for result in sorted(self.by_condition.values(), key=lambda r: r.wer, reverse=True):
             rows.append(
                 f"{result.condition:<20} {result.utterances:>3} "
                 f"{result.wer:>6.1%} {result.substitutions:>5} "

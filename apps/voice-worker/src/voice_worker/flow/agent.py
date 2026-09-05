@@ -37,8 +37,14 @@ from ..text.register import farmers_register
 from ..text.speech import FIRST_CLAUSE_WORDS, SentenceBuffer, split_sentences
 from ..tools.base import ToolContext, ToolRegistry, ToolResult
 from .address import AddressBudget, trim_address
-from .closing import CLOSING_LINE_HI, farmer_is_done
-from .context import CallerContext, ContextBuilder, ConversationMemory, DynamicHint
+from .closing import CLOSING_LINE_HI, agent_said_goodbye, farmer_is_done
+from .context import (
+    CallerContext,
+    ContextBuilder,
+    ConversationMemory,
+    DynamicHint,
+    language_label,
+)
 from .direct import DirectAnswers
 from .escalation import EscalationDecision, EscalationEngine, TransferRequest, TurnSignals
 from .focus import ConversationFocus
@@ -193,6 +199,9 @@ class Agent:
     #: agent answers questions behind the outbound script, which has its own
     #: idea of when the call is over.
     closes_calls: bool = True
+    #: The language the caller was last heard in (§11.1). The direct layer
+    #: answers in it when it has the words; the model is told to otherwise.
+    language: str = "hi-IN"
     #: Set once the closing line has been handed to the pipeline (§11.1
     #: CLOSE). The pipeline hangs up after it has been spoken.
     call_over: bool = False
@@ -204,7 +213,13 @@ class Agent:
     #: A user turn has been added to memory and not yet answered.
     _turn_open: bool = field(default=False, repr=False)
 
-    async def handle(self, transcript: str, *, asr_confidence: float | None = None) -> TurnResult:
+    async def handle(
+        self,
+        transcript: str,
+        *,
+        asr_confidence: float | None = None,
+        language: str | None = None,
+    ) -> TurnResult:
         """Run one turn end to end, answering only when the whole reply is in.
 
         The streaming counterpart is :meth:`respond`. Both share
@@ -213,6 +228,8 @@ class Agent:
         safety path that fired on one and not the other would be the worst bug
         this file could carry.
         """
+        if language:
+            self.language = language
         if self._closes_on(transcript):
             return self._close(transcript)
         fixed, prepared = await self._prepare(transcript, asr_confidence=asr_confidence)
@@ -333,6 +350,22 @@ class Agent:
         confident = prepared.asr_confidence is None or prepared.asr_confidence >= 0.55
         self.flow.record_turn(prepared.intent, confident=confident, resolved=resolved)
 
+        # The model is often the first to notice the conversation is over --
+        # a farmer who says "you can hang up now" gets "अभी कॉल खत्म करते
+        # हैं ... नमस्ते" and, until this, then had to hang up on an agent
+        # that had just said goodbye. A hand-over is the exception: the line
+        # is about to belong to somebody else, not to nobody.
+        took_leave = (
+            self.closes_calls
+            and not self.call_over
+            and not decision.escalate
+            and agent_said_goodbye(text)
+        )
+        if took_leave:
+            self.call_over = True
+            self.result = self.result or ClosedCall(call_outcome=CallOutcome.RESOLVED)
+            log.info("agent.closing", by="agent_line", turns=len(self.memory.turns) // 2)
+
         self.last_turn = TurnResult(
             text=text,
             intent=prepared.intent,
@@ -340,7 +373,9 @@ class Agent:
             escalation=decision if decision.escalate else None,
             validation=validation,
             cached=exhausted,
-            ends_agent_turns=exhausted or (decision.escalate and decision.immediate),
+            ends_agent_turns=(
+                exhausted or took_leave or (decision.escalate and decision.immediate)
+            ),
         )
         return self.last_turn
 
@@ -386,18 +421,42 @@ class Agent:
         if self.direct is None:
             return None
         try:
-            reply = await self.direct.answer(transcript, intent, self.focus)
+            reply = await self.direct.answer(transcript, intent, self.focus, language=self.language)
         except Exception as exc:
             log.warning("agent.direct_failed", error=type(exc).__name__)
             return None
         if reply is None:
             return None
-        text = self._trim_whole(reply.text)[0]
-        self.memory.add("assistant", text)
+        text = reply.text
+        if reply.language != self.language and self.gateway is not None:
+            # The direct layer has Hindi and English. A caller in Marathi or
+            # Tamil gets the same facts, put into their language by the
+            # model with the tool results alongside for the validator.
+            text = await self._render_in_language(text, reply.results)
+        text = self._trim_whole(text)[0]
         self._turn_open = False
-        self.flow.record_turn(reply.intent, confident=True, resolved=True)
+        # A question back ("कौन सा?", "नाम बता दीजिए") is not a resolved
+        # turn. Recording it as one is how the first calls asked the same
+        # thing five times: the repeat counter that §11.4 builds the change
+        # of tack on never moved.
+        tripped = self.flow.record_turn(reply.intent, confident=True, resolved=reply.resolved)
         self.focus.offered_transfer = reply.offered_transfer
-        log.info("agent.direct", intent=reply.intent.value, tools=len(reply.results))
+        log.info(
+            "agent.direct",
+            intent=reply.intent.value,
+            tools=len(reply.results),
+            resolved=reply.resolved,
+            misses=self.focus.misses,
+        )
+        if reply.handover:
+            # The direct layer paces the hand-over itself: it asks once, asks
+            # differently and offers a person, then gives up on the third
+            # miss. The flow's own counter trips a turn earlier and is left
+            # to the model path, where there is no second wording to try.
+            return await self._handover_turn(reply.intent, text)
+        if tripped is not None:
+            log.info("agent.direct_counter_tripped", reason=tripped, misses=self.focus.misses)
+        self.memory.add("assistant", text)
         self.last_turn = TurnResult(
             text=text,
             intent=reply.intent,
@@ -406,6 +465,75 @@ class Agent:
             direct=True,
         )
         return self.last_turn
+
+    async def _render_in_language(self, text: str, results: Sequence[ToolResult]) -> str:
+        """Say a composed Hindi reply in the caller's language (§11.1).
+
+        The numbers, names and rates are already grounded; the model is
+        asked only to put the sentence into another language, and its answer
+        is validated against the same tool results before it is spoken. Any
+        failure falls back to the Hindi -- a farmer who switched to Marathi
+        almost certainly follows Hindi, and a wrong number in Marathi is worse
+        than a right one in Hindi.
+        """
+        label = language_label(self.language)
+        # The composed sentence is itself grounded -- every figure in it came
+        # from a lookup or the catalogue -- so it rides with the tool results
+        # and the validator can check the rendering against it.
+        trimmed = [
+            *(r.to_dict() for r in results),
+            {"tool": "direct_answer", "ok": True, "data": {"text": text}},
+        ]
+        built = self.context_builder.build(
+            transcript=(
+                f"[यह बात {label} में कहिए — हर संख्या, नाम और रेट वैसा ही रखते हुए, "
+                f"एक-दो छोटे वाक्यों में] {text}"
+            ),
+            caller=self.caller,
+            hint=self.hint,
+            memory=self.memory,
+            tool_results=trimmed,
+            language=self.language,
+        )
+        try:
+            rendered = await self._collect(built, max_tokens=_token_budget(False))
+        except Exception as exc:
+            log.warning("agent.render_failed", language=self.language, error=type(exc).__name__)
+            return text
+        outcome = self.validator.validate(rendered, tool_results=trimmed, is_dosage=False)
+        if not rendered.strip() or not outcome.ok:
+            log.info("agent.render_rejected", language=self.language, rules=list(outcome.rules))
+            return text
+        return rendered
+
+    async def _handover_turn(self, intent: Intent, text: str) -> TurnResult:
+        """The farmer has not been understood twice running: a person (§11.4).
+
+        The line is spoken by the agent itself and names the hand-over, the
+        transfer tool picks who takes the call, and the loop carries it out
+        once the line is out -- the same path :meth:`_honest_turn` takes.
+        """
+        decision = EscalationDecision(
+            escalate=True,
+            reason=TransferReason.REPEATED_MISUNDERSTANDING,
+            detail="the request could not be resolved from the farmer's words twice (§11.4)",
+        )
+        turn = TurnResult(
+            text=text,
+            intent=intent,
+            escalation=decision,
+            validation=ValidationOutcome(ok=True),
+            direct=True,
+            ends_agent_turns=True,
+        )
+        turn = await self._with_transfer(turn)
+        self.memory.add("assistant", turn.text)
+        self.focus.note_answered()
+        if self.flow.can(CallState.ESCALATE):
+            self.flow.to(CallState.ESCALATE, reason=TransferReason.REPEATED_MISUNDERSTANDING.value)
+        log.info("agent.handover_after_misses", intent=intent.value)
+        self.last_turn = turn
+        return turn
 
     def _ask_for_crop(self, intent: Intent) -> TurnResult:
         """Advice needs a crop and a product before anything can be looked up."""
@@ -481,6 +609,7 @@ class Agent:
                 memory=self.memory,
                 tool_results=trimmed,
                 intent=intent,
+                language=self.language,
             )
             text, sir_used = self._trim_whole(
                 await self._collect(built, max_tokens=_token_budget(is_dosage))
@@ -536,7 +665,7 @@ class Agent:
         self.memory.add("assistant", self.closing_line)
         self.call_over = True
         self.result = ClosedCall(call_outcome=CallOutcome.RESOLVED)
-        log.info("agent.closing", turns=len(self.memory.turns) // 2)
+        log.info("agent.closing", by="farmer", turns=len(self.memory.turns) // 2)
         self.last_turn = TurnResult(
             text=self.closing_line,
             intent=Intent.OUT_OF_SCOPE,
@@ -679,6 +808,8 @@ class Agent:
         failure stops there and hands over -- a partial true answer plus a
         handover, rather than a retraction.
         """
+        if language:
+            self.language = language
         if self._closes_on(transcript):
             # "बस, धन्यवाद" is not a question. The goodbye comes from the
             # published config and the audio cache, not from the model --
@@ -728,6 +859,7 @@ class Agent:
             memory=self.memory,
             tool_results=trimmed,
             intent=prepared.intent,
+            language=self.language,
         )
 
         spoken: list[str] = []

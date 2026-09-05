@@ -163,7 +163,7 @@ class SmartTurnDetector(TurnDetector):
             log.info("turn.smart_turn_loaded", path=str(path))
         except (ConfigurationError, ImportError) as exc:
             self.degraded = True
-            log.error(
+            log.exception(
                 "turn.smart_turn_unavailable",
                 error=type(exc).__name__,
                 detail=str(exc)[:200],

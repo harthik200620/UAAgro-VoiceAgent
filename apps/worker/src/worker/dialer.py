@@ -118,9 +118,7 @@ class Dialer:
     def _min_gap_s(self) -> float:
         return 60.0 / max(1, self.calls_per_minute)
 
-    async def run(
-        self, campaign_id: uuid.UUID, contacts: list[Contact]
-    ) -> CampaignRun:
+    async def run(self, campaign_id: uuid.UUID, contacts: list[Contact]) -> CampaignRun:
         """Dial a campaign's contacts, respecting every §13.1 constraint."""
         run = CampaignRun(campaign_id=campaign_id)
         semaphore = asyncio.Semaphore(self.max_concurrent)
@@ -159,9 +157,7 @@ class Dialer:
                     try:
                         sid = await self.dial(target)
                         run.outcomes.append(
-                            DialOutcome(
-                                contact_id=target.farmer_id, dialled=True, call_sid=sid
-                            )
+                            DialOutcome(contact_id=target.farmer_id, dialled=True, call_sid=sid)
                         )
                     except Exception as exc:
                         # One failed dial does not stop a campaign. The retry
@@ -218,9 +214,7 @@ class Dialer:
         log.info("dialer.cancelled")
 
 
-def schedule_retry(
-    outcome: str, *, last_attempt: datetime, attempts: int
-) -> datetime | None:
+def schedule_retry(outcome: str, *, last_attempt: datetime, attempts: int) -> datetime | None:
     """§13.3's retry table, re-exported so the dialer and the API agree.
 
     One implementation, two callers. Two copies of a retry policy is how "opted

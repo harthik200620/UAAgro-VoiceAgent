@@ -236,7 +236,7 @@ class DeepgramFluxSTT(STTService):
                     self._queue.put_nowait(event)
                 except asyncio.QueueFull:
                     # Never silently drop: losing an EndOfTurn strands the call.
-                    log.error("stt.event_queue_full", provider=self.provider)
+                    log.warning("stt.event_queue_full", provider=self.provider)
                     await self._queue.put(event)
         except asyncio.CancelledError:
             raise

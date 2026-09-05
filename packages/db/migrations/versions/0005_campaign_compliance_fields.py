@@ -46,9 +46,7 @@ def upgrade() -> None:
             server_default=sa.text("true"),
         ),
     )
-    op.add_column(
-        "campaigns", sa.Column("dlt_entity_id", sa.String(length=80), nullable=True)
-    )
+    op.add_column("campaigns", sa.Column("dlt_entity_id", sa.String(length=80), nullable=True))
 
     # §13.1: a promotional campaign cannot reach an approved state without both
     # DLT identifiers. Enforced in the database as well as in the gate, because

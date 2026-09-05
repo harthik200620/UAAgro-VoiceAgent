@@ -1,0 +1,31 @@
+[project]
+name = "uaagro-demo"
+version = "0.1.0"
+description = "Flask demo backend: the browser call page and a live view of the stack"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # The demo is a classic request/response web application -- a page, a
+    # status probe, a form -- and Flask is the plainest way to write one.
+    # The real-time audio path stays on FastAPI: a 20 ms-frame WebSocket has
+    # no business on a WSGI server.
+    "flask>=3.1",
+    # A production WSGI server that is pure Python, so the demo container is
+    # the same image as every other service. Flask's own server is for a
+    # laptop, and says so on start-up.
+    "waitress>=3.0",
+    "httpx>=0.28",
+    "uaagro-domain",
+]
+
+[project.scripts]
+uaagro-demo = "demo.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/demo"]
+
+[tool.uv.sources]
+uaagro-domain = { workspace = true }

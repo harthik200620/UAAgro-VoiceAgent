@@ -67,6 +67,32 @@ _MATRA_FOLD = str.maketrans({"ी": "ि", "ू": "ु"})
 
 _WHITESPACE = re.compile(r"\s+")
 
+#: Vowel signs a Hindi noun picks up when it is inflected -- मसूर/मसूरी,
+#: चना/चने, बीज/बीजों. After :func:`normalise` has folded vowel length only
+#: these can remain at the end of a token.
+_INFLECTION: frozenset[str] = frozenset("ािुेैोौंः")
+#: A token shorter than this keeps its ending: "आम" is not "आ".
+_MIN_STEM = 3
+
+
+def stem(token: str) -> str:
+    """The token without its inflection: "मसुरि" → "मसुर", "चने" → "चन".
+
+    Used for the *last* comparison only, after exact and fuzzy matching have
+    had their turn. A recogniser gives back the word the farmer said, and a
+    farmer says "मसूरी का चाहिए" for the product the catalogue lists as मसूर
+    -- one matra apart, which is exactly the gap the edit-distance threshold
+    is tuned to refuse for two different products.
+    """
+    stripped = token
+    while len(stripped) > _MIN_STEM and stripped[-1] in _INFLECTION:
+        stripped = stripped[:-1]
+    return stripped
+
+
+def stem_phrase(text: str) -> str:
+    return " ".join(stem(t) for t in text.split())
+
 
 def normalise(text: str) -> str:
     """Fold the variation that should never decide a match.
@@ -126,6 +152,10 @@ class Place:
     name_hi: str
 
 
+#: A head word shorter than this is a brand initial or a unit, not a name.
+MIN_HEAD_LETTERS = 6
+
+
 @dataclass(frozen=True, slots=True)
 class LexiconEntry:
     """One catalogue item and every spoken form that should reach it."""
@@ -174,6 +204,13 @@ class Lexicon:
     places: tuple[Place, ...] = ()
     _exact: dict[str, str] = field(default_factory=dict, repr=False)
     _by_length: dict[int, list[tuple[str, str]]] = field(default_factory=dict, repr=False)
+    #: Stemmed variant -> SKU, or None where two SKUs share a stem. A shared
+    #: stem must never resolve: it would be the wrong product half the time.
+    _by_stem: dict[str, str | None] = field(default_factory=dict, repr=False)
+    #: The first word of a multi-word name, when it is long enough to be a
+    #: name of its own and only one product starts with it: "bispyribac"
+    #: for "Bispyribac Sodium 10% SC". None where two products share it.
+    _by_head: dict[str, str | None] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_entries(cls, entries: list[LexiconEntry], places: tuple[Place, ...] = ()) -> Lexicon:
@@ -184,13 +221,22 @@ class Lexicon:
     def _build(self) -> None:
         self._exact.clear()
         self._by_length.clear()
+        self._by_stem.clear()
+        self._by_head.clear()
         for entry in self.entries:
             for variant in entry.normalised_variants():
+                head, _, rest = variant.partition(" ")
+                if rest and len(head) >= MIN_HEAD_LETTERS and head.isalpha():
+                    owner = self._by_head.get(head, entry.sku)
+                    self._by_head[head] = entry.sku if owner == entry.sku else None
                 # First writer wins: an earlier SKU claiming a variant is a
                 # catalogue problem, surfaced by `conflicts()` rather than
                 # silently resolved differently on each rebuild.
                 self._exact.setdefault(variant, entry.sku)
                 self._by_length.setdefault(len(variant), []).append((variant, entry.sku))
+                stemmed = stem_phrase(variant)
+                owner = self._by_stem.get(stemmed, entry.sku)
+                self._by_stem[stemmed] = entry.sku if owner == entry.sku else None
 
     def conflicts(self) -> dict[str, list[str]]:
         """Variants claimed by more than one SKU.
@@ -262,6 +308,16 @@ class Lexicon:
                     second = candidate
 
         if best is None:
+            # The inflected form of a listed name: one matra past what the
+            # threshold allows, and unambiguous because a shared stem was
+            # dropped from the index at build time.
+            by_head = self._by_head.get(needle)
+            if by_head is not None:
+                return Match(sku=by_head, score=0.9, matched_text=text, matched_variant=needle)
+            stemmed = stem_phrase(needle)
+            by_stem = self._by_stem.get(stemmed)
+            if by_stem is not None and stemmed != needle:
+                return Match(sku=by_stem, score=0.9, matched_text=text, matched_variant=stemmed)
             return None
 
         score, sku, variant = best

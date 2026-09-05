@@ -148,6 +148,8 @@ def text_for_speech(text: str, *, language: str = "hi-IN") -> str:
     """
     if not text or not text.strip():
         return ""
+    if language.split("-")[0].lower() not in {"hi", "bho", "awa"}:
+        return _for_other_language(text, language)
 
     result = normalise_digits(text)
 
@@ -185,6 +187,59 @@ def text_for_speech(text: str, *, language: str = "hi-IN") -> str:
     # reported by unspeakable_fragments before transliteration hides it.
     result = transliterate(result)
 
+    return _MULTISPACE.sub(" ", result).strip()
+
+
+#: What the currency sign, the percent sign and a joining "+" become in the
+#: languages a caller may switch to. Digits are left as digits: every
+#: synthesiser on the routing table reads them in its own language, and a
+#: Hindi number-word inside a Tamil sentence is the wrong kind of wrong.
+_RUPEE_WORD: dict[str, str] = {
+    "en": "rupees",
+    "mr": "रुपये",
+    "bn": "টাকা",
+    "ta": "ரூபாய்",
+    "te": "రూపాయలు",
+    "kn": "ರೂಪಾಯಿ",
+    "ml": "രൂപ",
+    "gu": "રૂપિયા",
+    "pa": "ਰੁਪਏ",
+}
+_PERCENT_WORD: dict[str, str] = {
+    "en": "percent",
+    "mr": "टक्के",
+    "bn": "শতাংশ",
+    "ta": "சதவீதம்",
+    "te": "శాతం",
+    "kn": "ಶೇಕಡಾ",
+    "ml": "ശതമാനം",
+    "gu": "ટકા",
+    "pa": "ਪ੍ਰਤੀਸ਼ਤ",
+}
+_AND_WORD: dict[str, str] = {
+    "en": "and",
+    "mr": "आणि",
+    "bn": "এবং",
+    "ta": "மற்றும்",
+    "te": "మరియు",
+    "kn": "ಮತ್ತು",
+    "ml": "ഒപ്പം",
+    "gu": "અને",
+    "pa": "ਅਤੇ",
+}
+
+
+def _for_other_language(text: str, language: str) -> str:
+    """The non-Hindi path: symbols become words, numbers stay numerals."""
+    bare = language.split("-")[0].lower()
+    rupee = _RUPEE_WORD.get(bare, "rupees")
+    percent = _PERCENT_WORD.get(bare, "percent")
+    joiner = _AND_WORD.get(bare, "and")
+    result = normalise_digits(text)
+    result = _CURRENCY.sub(lambda m: f" {_clean_number(m.group(1)).normalize():f} {rupee}", result)
+    result = result.replace("%", f" {percent} ")
+    result = re.sub(r"\s*\+\s*", f" {joiner} ", result)
+    result = re.sub(r"\s*&\s*", f" {joiner} ", result)
     return _MULTISPACE.sub(" ", result).strip()
 
 

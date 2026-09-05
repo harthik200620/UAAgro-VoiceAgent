@@ -105,17 +105,13 @@ class WorkerClient:
     async def speech(self, text: str, *, language: str) -> bytes:
         response = await self._post("/internal/speech", {"text": text, "language": language})
         if response.status_code >= 400:
-            raise VendorError(
-                "The voice did not return audio.", remedy=_remedy_of(response)
-            )
+            raise VendorError("The voice did not return audio.", remedy=_remedy_of(response))
         return response.content
 
     async def test_call(self, *, phone: str, config_id: str) -> str:
         response = await self._post("/internal/test-call", {"phone": phone, "configId": config_id})
         if response.status_code >= 400:
-            raise VendorError(
-                "The test call could not be placed.", remedy=_remedy_of(response)
-            )
+            raise VendorError("The test call could not be placed.", remedy=_remedy_of(response))
         return str(response.json().get("callSid") or "")
 
 

@@ -292,6 +292,33 @@ class BuiltContext:
     cacheable_prefix: str
 
 
+#: How each route language is named to the model, in the persona's own
+#: language. The model is told which language the farmer is speaking and
+#: asked to answer in it; the persona's rules on length and register hold.
+LANGUAGE_LABELS_HI: dict[str, str] = {
+    "hi-IN": "हिंदी",
+    "en-IN": "अंग्रेज़ी",
+    "en-US": "अंग्रेज़ी",
+    "mr-IN": "मराठी",
+    "bn-IN": "बंगाली",
+    "ta-IN": "तमिल",
+    "te-IN": "तेलुगु",
+    "kn-IN": "कन्नड़",
+    "ml-IN": "मलयालम",
+    "gu-IN": "गुजराती",
+    "pa-IN": "पंजाबी",
+    "bho": "भोजपुरी",
+}
+
+
+def language_label(code: str) -> str:
+    return LANGUAGE_LABELS_HI.get(code, code)
+
+
+def is_hindi(code: str | None) -> bool:
+    return not code or code.split("-")[0].lower() in {"hi", "bho", "awa"}
+
+
 @dataclass
 class ContextBuilder:
     """Assembles §6.2's five blocks."""
@@ -309,6 +336,7 @@ class ContextBuilder:
         tool_results: Sequence[Mapping[str, Any]] = (),
         intent: Intent | None = None,
         tool_hints: Sequence[str] = (),
+        language: str | None = None,
     ) -> BuiltContext:
         """Build one turn's prompt.
 
@@ -325,6 +353,15 @@ class ContextBuilder:
             rendered = hint.render()
             if rendered:
                 blocks.append(rendered)
+
+        if language and not is_hindi(language):
+            # §11.1 follows the caller's language. A block of its own rather
+            # than a change to the persona: the persona is the cached prefix.
+            label = language_label(language)
+            blocks.append(
+                f"किसान {label} में बोल रहे हैं। जवाब {label} में दें — वही छोटा, सीधा ढंग; "
+                "रेट और मात्रा अंकों में लिखें।"
+            )
 
         if intent is not None and intent is not Intent.UNKNOWN:
             line = f"इस टर्न का अनुमानित इरादा: {intent.value}"

@@ -119,7 +119,7 @@ async def run(
         except Exception as exc:
             # Logged with the type only. A traceback here would carry transcript
             # fragments into the log aggregator (§19, §23-6).
-            log.error("postcall.stage_failed", stage=name, error=type(exc).__name__)
+            log.exception("postcall.stage_failed", stage=name, error=type(exc).__name__)
             report.stages.append(StageResult(name, ok=False, detail=type(exc).__name__))
 
     await stage("transcript", lambda: _consolidate_transcript(session, call))
